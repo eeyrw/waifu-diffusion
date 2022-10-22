@@ -35,6 +35,13 @@ def get_parser(**parser_kwargs):
 
     parser = argparse.ArgumentParser(**parser_kwargs)
     parser.add_argument(
+        "--finetune_from",
+        type=str,
+        nargs="?",
+        default="",
+        help="path to checkpoint to load model state from"
+    )
+    parser.add_argument(
         "-n",
         "--name",
         type=str,
@@ -296,7 +303,7 @@ class ImageLogger(Callback):
         self.batch_freq = batch_frequency
         self.max_images = max_images
         self.logger_log_images = {
-            pl.loggers.WandbLogger: self._testtube,
+            pl.loggers.TensorBoardLogger: self._testtube,
         }
         self.log_steps = [2 ** n for n in range(int(np.log2(self.batch_freq)) + 1)]
         if not increase_log_steps:
@@ -314,10 +321,11 @@ class ImageLogger(Callback):
             grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
 
             tag = f"{split}/{k}"
-            pl_module.logger.experiment.log(
-                {'tag': tag, 'examples': grid},
-                step=pl_module.global_step
-            )
+            # pl_module.logger.experiment.log(
+            #     {'tag': tag, 'examples': grid},
+            #     step=pl_module.global_step
+            # )
+            pl_module.logger.experiment.add_images(tag, grid, pl_module.global_step, dataformats='CHW')
 
     @rank_zero_only
     def log_local(self, save_dir, split, images,
@@ -354,7 +362,7 @@ class ImageLogger(Callback):
             with torch.no_grad():
                 with torch.autocast('cuda'):
                     images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
-
+                    
             for k in images:
                 N = min(images[k].shape[0], self.max_images)
                 images[k] = images[k][:N]
@@ -537,6 +545,19 @@ if __name__ == "__main__":
         # model
         model = instantiate_from_config(config.model)
 
+        if not opt.finetune_from == "":
+            print(f"Attempting to load state from {opt.finetune_from}")
+            old_state = torch.load(opt.finetune_from, map_location="cpu")
+            if "state_dict" in old_state:
+                print(f"Found nested key 'state_dict' in checkpoint, loading this instead")
+                old_state = old_state["state_dict"]
+            m, u = model.load_state_dict(old_state, strict=False)
+            if len(m) > 0:
+                print("missing keys:")
+                print(m)
+            if len(u) > 0:
+                print("unexpected keys:")
+                print(u)
         # trainer and callbacks
         trainer_kwargs = dict()
 
@@ -558,8 +579,15 @@ if __name__ == "__main__":
                     "save_dir": logdir,
                 }
             },
+            "tensorboard": {
+                "target": "pytorch_lightning.loggers.TensorBoardLogger",
+                "params": {
+                    "name": 'tb',
+                    "save_dir": logdir,
+                }
+            },
         }
-        default_logger_cfg = default_logger_cfgs["wandb"]
+        default_logger_cfg = default_logger_cfgs["tensorboard"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:

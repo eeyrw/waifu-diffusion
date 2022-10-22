@@ -25,6 +25,7 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 
+import bitsandbytes as bnb
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -418,7 +419,8 @@ class DDPM(pl.LightningModule):
         params = list(self.model.parameters())
         if self.learn_logvar:
             params = params + [self.logvar]
-        opt = torch.optim.AdamW(params, lr=lr)
+        # opt = torch.optim.AdamW(params, lr=lr)
+        opt = bnb.optim.Adam8bit(params, lr=lr)
         return opt
 
 
@@ -1368,7 +1370,8 @@ class LatentDiffusion(DDPM):
         if self.learn_logvar:
             print('Diffusion model optimizing logvar')
             params.append(self.logvar)
-        opt = torch.optim.AdamW(params, lr=lr)
+        # opt = torch.optim.AdamW(params, lr=lr)
+        opt = bnb.optim.Adam8bit(params, lr=lr)
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
             scheduler = instantiate_from_config(self.scheduler_config)
