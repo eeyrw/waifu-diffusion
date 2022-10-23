@@ -8,7 +8,7 @@ args = parser.parse_args()
 file = args.input
 
 
-def prune_it(p, keep_only_ema=True):
+def prune_it(p, keep_only_ema=False):
     print(f"prunin' in path: {p}")
     size_initial = os.path.getsize(p)
     nsd = dict()

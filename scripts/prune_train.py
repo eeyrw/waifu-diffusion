@@ -40,7 +40,7 @@ def prune_it(p, keep_only_ema=True):
             new_sd[k] = sd[k]
         nsd['state_dict'] = new_sd
 
-    fn = f"{os.path.splitext(p)[0]}-pruned.ckpt" if not keep_only_ema else f"{os.path.splitext(p)[0]}-ema-pruned.ckpt"
+    fn = f"{os.path.splitext(p)[0]}-pruned.ckpt" if not keep_only_ema else f"{os.path.splitext(p)[0]}-no_ema.ckpt"
     print(f"saving pruned checkpoint at: {fn}")
     torch.save(nsd, fn)
     newsize = os.path.getsize(fn)
