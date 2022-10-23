@@ -1,5 +1,5 @@
 from operator import mod
-from typing import Dict
+from typing import Dict, final
 import numpy as np
 from omegaconf import DictConfig, ListConfig
 import torch
@@ -13,8 +13,43 @@ from ldm.util import instantiate_from_config
 import os
 import random
 
+def GenImageSizeBuckets():
+    # https://blog.novelai.net/novelai-improvements-on-stable-diffusion-e10d38db82ac
+    # ● Set the width to 256.
+    # ● While the width is less than or equal to 1024:
+    # • Find the largest height such that height is less than or equal to 1024 and that width multiplied by height is less than or equal to 512 * 768.
+    # • Add the resolution given by height and width as a bucket.
+    # • Increase the width by 64.
+
+    maxPixelNum =768*640
+    width = 256
+    bucketSet=set()
+    bucketSet.add((512,512)) # Add default size
+    while width<=1024:
+        height = min(maxPixelNum//width//64*64,1024)
+        bucketSet.add((width,height))
+        bucketSet.add((height,width))
+        width = width+64
+    
+    return list(bucketSet)
+
+
+def ResizeAndCrop(buckets,img):
+    img_w, img_h = img.size
+    bucketRatios = np.array([w/h for w,h in buckets])
+    targetRatios = np.repeat(img_w/img_h,len(bucketRatios))
+    bucketIndex = np.argmin(np.abs(bucketRatios-targetRatios))
+    final_w,final_h = buckets[bucketIndex]
+    rsz = transforms.Resize(min(final_w,final_h))
+    crp = transforms.RandomCrop((final_h,final_w),pad_if_needed=True)
+    img = rsz(img)
+    img = crp(img)
+    return img
+    
+
+
 class ImageInfoDs(Dataset):
-    def __init__(self, root_dir,image_transforms,
+    def __init__(self, root_dir,image_transforms=None,
     is_make_square=True,ucg=0.1,mode='train',
     val_split=10) -> None:
         self.root_dir = Path(root_dir)
@@ -27,11 +62,15 @@ class ImageInfoDs(Dataset):
         else:
             self.imageInfoList = self.imageInfoList[0:val_split]
 
-        image_transforms = [instantiate_from_config(tt) for tt in image_transforms]
-        image_transforms = transforms.Compose(image_transforms)
-        self.tform = image_transforms
+        if image_transforms:
+            image_transforms = [instantiate_from_config(tt) for tt in image_transforms]
+            image_transforms = transforms.Compose(image_transforms)
+            self.tform = image_transforms
+        else:
+            self.tform = None
         self.is_make_square = is_make_square
         self.ucg = ucg
+        self.buckets = GenImageSizeBuckets()
 
         # assert all(['full/' + str(x.name) in self.captions for x in self.paths])
             
@@ -59,7 +98,9 @@ class ImageInfoDs(Dataset):
         im = im.convert("RGB")
         if self.is_make_square:
             im = self._make_square(im)
-        im = self.tform(im)
+        im = ResizeAndCrop(self.buckets, im)
+        if self.tform:
+            im = self.tform(im)
         im = np.array(im).astype(np.uint8)
         return (im / 127.5 - 1.0).astype(np.float32)
 
