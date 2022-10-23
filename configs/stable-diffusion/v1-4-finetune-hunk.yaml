@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1e-06
+  base_learning_rate: 7e-06
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
     linear_start: 0.00085
@@ -13,7 +13,7 @@ model:
     channels: 4
     cond_stage_trainable: false   # Note: different from the one we trained before
     conditioning_key: crossattn
-    monitor: val/loss_simple_ema
+    monitor: val/loss_simple
     scale_factor: 0.18215
     use_ema: False
 
@@ -85,36 +85,36 @@ data:
         root_dir: '/root/autodl-tmp/FinalDs'
         mode: "train"
         ucg: 0.1 # unconditional guidance training
-        is_make_square: true
-        image_transforms:
-        - target: torchvision.transforms.Resize
-          params:
-            size: 512
-            interpolation: 3
+        is_make_square: False
+        # image_transforms:
+        # - target: torchvision.transforms.Resize
+        #   params:
+        #     size: [768,768]
+        #     interpolation: 3
     validation:
       target: ldm.data.simple.ImageInfoDs
       params:
         root_dir: '/root/autodl-tmp/FinalDs'
         mode: "val"
-        val_split: 10
+        val_split: 1
         ucg: 0.1
-        is_make_square: true
-        image_transforms:
-        - target: torchvision.transforms.Resize
-          params:
-            size: 512
-            interpolation: 3
+        is_make_square: False
+        # image_transforms:
+        # - target: torchvision.transforms.Resize
+        #   params:
+        #     size: [768,768]
+        #     interpolation: 3
 
 lightning:
   modelcheckpoint:
     params:
-      every_n_train_steps: 4000
+      every_n_train_steps: 500
   callbacks:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 1000
-        max_images: 4
+        batch_frequency: 100
+        max_images: 1
         increase_log_steps: False
         log_first_step: True
         log_images_kwargs:
@@ -122,7 +122,7 @@ lightning:
           inpaint: False
           plot_progressive_rows: False
           plot_diffusion_rows: False
-          N: 4
+          N: 1
           ddim_steps: 50
   trainer:
       precision: 16
@@ -131,4 +131,5 @@ lightning:
       benchmark: True
       limit_val_batches: 0
       num_sanity_val_steps: 0
-      accumulate_grad_batches: 1
+      accumulate_grad_batches: 8
+      fast_dev_run: False
