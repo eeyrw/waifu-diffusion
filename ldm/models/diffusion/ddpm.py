@@ -887,16 +887,6 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
         return self.p_losses(x, c, t, *args, **kwargs)
 
-    def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
-        def rescale_bbox(bbox):
-            x0 = clamp((bbox[0] - crop_coordinates[0]) / crop_coordinates[2])
-            y0 = clamp((bbox[1] - crop_coordinates[1]) / crop_coordinates[3])
-            w = min(bbox[2] / crop_coordinates[2], 1 - x0)
-            h = min(bbox[3] / crop_coordinates[3], 1 - y0)
-            return x0, y0, w, h
-
-        return [rescale_bbox(b) for b in bboxes]
-
     def apply_model(self, x_noisy, t, cond, return_ids=False):
 
         if isinstance(cond, dict):
