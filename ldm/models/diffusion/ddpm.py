@@ -72,6 +72,7 @@ class DDPM(pl.LightningModule):
                  use_positional_encodings=False,
                  learn_logvar=False,
                  logvar_init=0.,
+                 use_adam8bit_optmizer=False
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -113,6 +114,8 @@ class DDPM(pl.LightningModule):
         self.logvar = torch.full(fill_value=logvar_init, size=(self.num_timesteps,))
         if self.learn_logvar:
             self.logvar = nn.Parameter(self.logvar, requires_grad=True)
+
+        self.use_adam8bit_optmizer = use_adam8bit_optmizer
 
 
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
@@ -419,8 +422,11 @@ class DDPM(pl.LightningModule):
         params = list(self.model.parameters())
         if self.learn_logvar:
             params = params + [self.logvar]
-        # opt = torch.optim.AdamW(params, lr=lr)
-        opt = bnb.optim.Adam8bit(params, lr=lr)
+        
+        if self.use_adam8bit_optmizer:
+            opt = bnb.optim.Adam8bit(params, lr=lr)
+        else:
+            opt = torch.optim.AdamW(params, lr=lr)
         return opt
 
 
@@ -1370,8 +1376,10 @@ class LatentDiffusion(DDPM):
         if self.learn_logvar:
             print('Diffusion model optimizing logvar')
             params.append(self.logvar)
-        # opt = torch.optim.AdamW(params, lr=lr)
-        opt = bnb.optim.Adam8bit(params, lr=lr)
+        if self.use_adam8bit_optmizer:
+            opt = bnb.optim.Adam8bit(params, lr=lr)
+        else:
+            opt = torch.optim.AdamW(params, lr=lr)
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
             scheduler = instantiate_from_config(self.scheduler_config)
