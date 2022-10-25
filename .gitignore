@@ -11,6 +11,7 @@ scores.json
 danbooru-aesthetic
 logs
 *.tar
+models/first_stage_models/*/*.ckpt
 
 # =========================================================================== #
 # 	Python-related
