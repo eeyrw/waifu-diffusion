@@ -13,7 +13,7 @@ from ldm.util import instantiate_from_config
 import os
 import random
 
-def GenImageSizeBuckets():
+def GenImageSizeBuckets(h,w):
     # https://blog.novelai.net/novelai-improvements-on-stable-diffusion-e10d38db82ac
     # ● Set the width to 256.
     # ● While the width is less than or equal to 1024:
@@ -21,10 +21,10 @@ def GenImageSizeBuckets():
     # • Add the resolution given by height and width as a bucket.
     # • Increase the width by 64.
 
-    maxPixelNum =768*640
+    maxPixelNum =h*w
     width = 256
     bucketSet=set()
-    bucketSet.add((512,512)) # Add default size
+    bucketSet.add((min(h,w),min(h,w))) # Add default size
     while width<=1024:
         height = min(maxPixelNum//width//64*64,1024)
         bucketSet.add((width,height))
@@ -70,7 +70,8 @@ class ImageInfoDs(Dataset):
             self.tform = None
         self.is_make_square = is_make_square
         self.ucg = ucg
-        self.buckets = GenImageSizeBuckets()
+        self.big_buckets = GenImageSizeBuckets(768,640)
+        self.small_buckets = GenImageSizeBuckets(512,512)
 
         # assert all(['full/' + str(x.name) in self.captions for x in self.paths])
             
@@ -98,7 +99,10 @@ class ImageInfoDs(Dataset):
         im = im.convert("RGB")
         if self.is_make_square:
             im = self._make_square(im)
-        im = ResizeAndCrop(self.buckets, im)
+        if random.random() < 0.5:
+            im = ResizeAndCrop(self.small_buckets, im)
+        else:
+            im = ResizeAndCrop(self.big_buckets, im)
         if self.tform:
             im = self.tform(im)
         im = np.array(im).astype(np.uint8)
