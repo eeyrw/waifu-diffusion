@@ -438,7 +438,6 @@ class LatentDiffusion(DDPM):
                  num_timesteps_cond=None,
                  cond_stage_key="image",
                  cond_stage_trainable=False,
-                 first_stage_trainable=False,
                  concat_mode=True,
                  cond_stage_forward=None,
                  conditioning_key=None,
@@ -458,7 +457,6 @@ class LatentDiffusion(DDPM):
         super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
         self.concat_mode = concat_mode
         self.cond_stage_trainable = cond_stage_trainable
-        self.first_stage_trainable = first_stage_trainable
         self.cond_stage_key = cond_stage_key
         try:
             self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
@@ -512,16 +510,10 @@ class LatentDiffusion(DDPM):
 
     def instantiate_first_stage(self, config):
         model = instantiate_from_config(config)
-        if self.first_stage_trainable:
-            print('Train first stage')
-            self.first_stage_model = model.train()
-            for param in self.first_stage_model.parameters():
-                param.requires_grad = True
-        else:
-            self.first_stage_model = model.eval()
-            self.first_stage_model.train = disabled_train
-            for param in self.first_stage_model.parameters():
-                param.requires_grad = False
+        self.first_stage_model = model.eval()
+        self.first_stage_model.train = disabled_train
+        for param in self.first_stage_model.parameters():
+            param.requires_grad = False
 
     def instantiate_cond_stage(self, config):
         if not self.cond_stage_trainable:

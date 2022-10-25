@@ -12,7 +12,6 @@ model:
     image_size: 64
     channels: 4
     cond_stage_trainable: false   # Note: different from the one we trained before
-    first_stage_trainable: True
     conditioning_key: crossattn
     monitor: val/loss_simple
     scale_factor: 0.18215
