@@ -71,8 +71,8 @@ model:
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
       params:
-        penultimate: true # use 2nd last layer - https://arxiv.org/pdf/2205.11487.pdf D.1
-        extended_mode: 3 # extend clip context to 225 tokens - as per NAI blogpost
+        penultimate: False # use 2nd last layer - https://arxiv.org/pdf/2205.11487.pdf D.1
+        #extended_mode: 3 # extend clip context to 225 tokens - as per NAI blogpost
 
 data:
   target: main.DataModuleFromConfig
@@ -104,7 +104,7 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 100
+        batch_frequency: 200
         max_images: 1
         increase_log_steps: False
         log_first_step: True
