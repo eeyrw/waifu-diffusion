@@ -87,11 +87,6 @@ data:
         mode: "train"
         ucg: 0.1 # unconditional guidance training
         is_make_square: False
-        # image_transforms:
-        # - target: torchvision.transforms.Resize
-        #   params:
-        #     size: [768,768]
-        #     interpolation: 3
     validation:
       target: ldm.data.simple.ImageInfoDs
       params:
@@ -100,11 +95,6 @@ data:
         val_split: 1
         ucg: 0.1
         is_make_square: False
-        # image_transforms:
-        # - target: torchvision.transforms.Resize
-        #   params:
-        #     size: [768,768]
-        #     interpolation: 3
 
 lightning:
   modelcheckpoint:
