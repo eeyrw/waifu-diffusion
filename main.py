@@ -20,6 +20,11 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
+
+from transformers import logging
+
+logging.set_verbosity_warning() # Turn off CLIP horrible warning
+
 @rank_zero_only
 def rank_zero_print(*args):
     print(*args)
@@ -693,7 +698,7 @@ if __name__ == "__main__":
         trainer_kwargs["plugins"] = list()
         from pytorch_lightning.plugins import DDPPlugin, NativeMixedPrecisionPlugin
         #trainer_kwargs["plugins"].append(DDPPlugin(find_unused_parameters=False))
-        trainer_kwargs["plugins"].append(NativeMixedPrecisionPlugin(16, 'cuda', torch.cuda.amp.GradScaler(enabled=True)))
+        # trainer_kwargs["plugins"].append(NativeMixedPrecisionPlugin(16, 'cuda', torch.cuda.amp.GradScaler(enabled=True)))
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         #trainer = Trainer(gpus=1, precision=16, amp_backend="native", strategy="deepspeed_stage_2_offload", benchmark=True, limit_val_batches=0, num_sanity_val_steps=0, accumulate_grad_batches=1)
         trainer.logdir = logdir  ###

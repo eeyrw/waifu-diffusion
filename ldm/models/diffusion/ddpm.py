@@ -24,7 +24,7 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
-
+from deepspeed.ops.adam import DeepSpeedCPUAdam,FusedAdam
 import bitsandbytes as bnb
 
 __conditioning_keys__ = {'concat': 'c_concat',
@@ -466,8 +466,7 @@ class LatentDiffusion(DDPM):
             self.scale_factor = scale_factor
         else:
             self.register_buffer('scale_factor', torch.tensor(scale_factor))
-        self.instantiate_first_stage(first_stage_config)
-        self.instantiate_cond_stage(cond_stage_config)
+
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
         self.bbox_tokenizer = None  
@@ -476,6 +475,13 @@ class LatentDiffusion(DDPM):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
             self.restarted_from_ckpt = True
+
+        self.first_stage_config = first_stage_config
+        self.cond_stage_config = cond_stage_config
+
+    def configure_sharded_model(self):
+        self.instantiate_first_stage(self.first_stage_config)
+        self.instantiate_cond_stage(self.cond_stage_config)
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)

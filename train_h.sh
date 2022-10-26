@@ -1,7 +1,7 @@
 python main.py \
     -t \
-    --base configs/stable-diffusion/fp16-no-ema-finetune.yaml \
-    --gpus 0, \
+    --base configs/stable-diffusion/fp16-no-ema-finetune-deepspeed.yaml \
+    --gpus 0,1 \
     --scale_lr False \
     --num_nodes 1 \
     --check_val_every_n_epoch 20000 \
