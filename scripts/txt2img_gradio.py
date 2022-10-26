@@ -140,7 +140,7 @@ class CFGDenoiser(nn.Module):
         return uncond + (cond - uncond) * cond_scale
 
 config = OmegaConf.load("configs/stable-diffusion/v1-inference.yaml")
-model = load_model_from_config(config, "/root/autodl-tmp/2022-10-22T20-17-01_v1-4-finetune-hunk/checkpoints/last-pruned.ckpt")
+model = load_model_from_config(config, "/root/autodl-tmp/2022-10-25T13-20-49_fp16-no-ema-finetune/checkpoints/ep9-pruned.ckpt")
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 model = model.half().to(device)
