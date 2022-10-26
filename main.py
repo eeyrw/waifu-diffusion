@@ -20,6 +20,9 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
+@rank_zero_only
+def rank_zero_print(*args):
+    print(*args)
 
 
 def get_parser(**parser_kwargs):
@@ -272,13 +275,13 @@ class SetupCallback(Callback):
             if "callbacks" in self.lightning_config:
                 if 'metrics_over_trainsteps_checkpoint' in self.lightning_config['callbacks']:
                     os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
-            print("Project config")
-            print(OmegaConf.to_yaml(self.config))
+            rank_zero_print("Project config")
+            rank_zero_print(OmegaConf.to_yaml(self.config))
             OmegaConf.save(self.config,
                            os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
 
-            print("Lightning config")
-            print(OmegaConf.to_yaml(self.lightning_config))
+            rank_zero_print("Lightning config")
+            rank_zero_print(OmegaConf.to_yaml(self.lightning_config))
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
                            os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
 
@@ -386,7 +389,7 @@ class ImageLogger(Callback):
             try:
                 self.log_steps.pop(0)
             except IndexError as e:
-                print(e)
+                rank_zero_print(e)
                 pass
             return True
         return False
@@ -537,7 +540,7 @@ if __name__ == "__main__":
             cpu = True
         else:
             gpuinfo = trainer_config["gpus"]
-            print(f"Running on GPUs {gpuinfo}")
+            rank_zero_print(f"Running on GPUs {gpuinfo}")
             cpu = False
         trainer_opt = argparse.Namespace(**trainer_config)
         lightning_config.trainer = trainer_config
@@ -546,18 +549,19 @@ if __name__ == "__main__":
         model = instantiate_from_config(config.model)
 
         if not opt.finetune_from == "":
-            print(f"Attempting to load state from {opt.finetune_from}")
+            rank_zero_print(f"Attempting to load state from {opt.finetune_from}")
             old_state = torch.load(opt.finetune_from, map_location="cpu")
             if "state_dict" in old_state:
-                print(f"Found nested key 'state_dict' in checkpoint, loading this instead")
+                rank_zero_print(f"Found nested key 'state_dict' in checkpoint, loading this instead")
                 old_state = old_state["state_dict"]
             m, u = model.load_state_dict(old_state, strict=False)
             if len(m) > 0:
-                print("missing keys:")
-                print(m)
+                rank_zero_print("missing keys:")
+                rank_zero_print(m)
             if len(u) > 0:
-                print("unexpected keys:")
-                print(u)
+                rank_zero_print("unexpected keys:")
+                rank_zero_print(u)
+
         # trainer and callbacks
         trainer_kwargs = dict()
 
@@ -607,7 +611,7 @@ if __name__ == "__main__":
             }
         }
         if hasattr(model, "monitor"):
-            print(f"Monitoring {model.monitor} as checkpoint metric.")
+            rank_zero_print(f"Monitoring {model.monitor} as checkpoint metric.")
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
             default_modelckpt_cfg["params"]["save_top_k"] = 3
 
@@ -616,7 +620,7 @@ if __name__ == "__main__":
         else:
             modelckpt_cfg =  OmegaConf.create()
         modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
-        print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
+        rank_zero_print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
         if version.parse(pl.__version__) < version.parse('1.4.0'):
             trainer_kwargs["checkpoint_callback"] = instantiate_from_config(modelckpt_cfg)
 
@@ -662,7 +666,7 @@ if __name__ == "__main__":
             callbacks_cfg = OmegaConf.create()
 
         if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
-            print(
+            rank_zero_print(
                 'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
             default_metrics_over_trainsteps_ckpt_dict = {
                 'metrics_over_trainsteps_checkpoint':
@@ -701,9 +705,12 @@ if __name__ == "__main__":
         # lightning still takes care of proper multiprocessing though
         data.prepare_data()
         data.setup()
-        print("#### Data #####")
-        for k in data.datasets:
-            print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+        rank_zero_print("#### Data #####")
+        try:
+            for k in data.datasets:
+                rank_zero_print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+        except:
+            rank_zero_print("datasets not yet initialized.")
 
         # configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
@@ -715,24 +722,24 @@ if __name__ == "__main__":
             accumulate_grad_batches = lightning_config.trainer.accumulate_grad_batches
         else:
             accumulate_grad_batches = 1
-        print(f"accumulate_grad_batches = {accumulate_grad_batches}")
+        rank_zero_print(f"accumulate_grad_batches = {accumulate_grad_batches}")
         lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
         if opt.scale_lr:
             model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
-            print(
+            rank_zero_print(
                 "Setting learning rate to {:.2e} = {} (accumulate_grad_batches) * {} (num_gpus) * {} (batchsize) * {:.2e} (base_lr)".format(
                     model.learning_rate, accumulate_grad_batches, ngpu, bs, base_lr))
         else:
             model.learning_rate = base_lr
-            print("++++ NOT USING LR SCALING ++++")
-            print(f"Setting learning rate to {model.learning_rate:.2e}")
+            rank_zero_print("++++ NOT USING LR SCALING ++++")
+            rank_zero_print(f"Setting learning rate to {model.learning_rate:.2e}")
 
 
         # allow checkpointing via USR1
         def melk(*args, **kwargs):
             # run all checkpoint hooks
             if trainer.global_rank == 0:
-                print("Summoning checkpoint.")
+                rank_zero_print("Summoning checkpoint.")
                 ckpt_path = os.path.join(ckptdir, "last.ckpt")
                 trainer.save_checkpoint(ckpt_path)
 
@@ -773,4 +780,4 @@ if __name__ == "__main__":
             os.makedirs(os.path.split(dst)[0], exist_ok=True)
             os.rename(logdir, dst)
         if trainer.global_rank == 0:
-            print(trainer.profiler.summary())
+            rank_zero_print(trainer.profiler.summary())
