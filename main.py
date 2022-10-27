@@ -20,6 +20,11 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
+
+from transformers import logging
+
+logging.set_verbosity_error() # Turn off CLIP horrible warning
+
 @rank_zero_only
 def rank_zero_print(*args):
     print(*args)
