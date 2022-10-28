@@ -350,7 +350,7 @@ class DDPM(pl.LightningModule):
             self.log_dict(loss_dict, prog_bar=True,
                         logger=True, on_step=True, on_epoch=True)
 
-            self.log("global_step", self.global_step,
+            self.log("global_step", torch.tensor(self.global_step,dtype=torch.float32),
                     prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
             if self.use_scheduler:
@@ -1025,7 +1025,6 @@ class LatentDiffusion(DDPM):
 
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
-
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
         # loss = loss_simple / torch.exp(self.logvar) + self.logvar
