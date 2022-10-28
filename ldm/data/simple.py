@@ -70,7 +70,7 @@ class ImageInfoDs(Dataset):
             self.tform = None
         self.is_make_square = is_make_square
         self.ucg = ucg
-        self.big_buckets = GenImageSizeBuckets(768,640)
+        self.big_buckets = GenImageSizeBuckets(768,768)
         self.small_buckets = GenImageSizeBuckets(512,512)
 
         # assert all(['full/' + str(x.name) in self.captions for x in self.paths])

@@ -6,7 +6,9 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-
+import xformers
+import xformers.ops
+from typing import Any, Optional
 
 def exists(val):
     return val is not None
@@ -192,27 +194,99 @@ class CrossAttention(nn.Module):
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         return self.to_out(out)
 
+class MemoryEfficientCrossAttention(nn.Module):
+     def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.0):
+         super().__init__()
+         inner_dim = dim_head * heads
+         context_dim = default(context_dim, query_dim)
+
+         self.heads = heads
+         self.dim_head = dim_head
+
+         self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
+         self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
+         self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+
+         self.to_out = nn.Sequential(nn.Linear(inner_dim, query_dim), nn.Dropout(dropout))
+         self.attention_op: Optional[Any] = None
+
+     def forward(self, x, context=None, mask=None):
+         q = self.to_q(x)
+         context = default(context, x)
+         k = self.to_k(context)
+         v = self.to_v(context)
+
+         b, _, _ = q.shape
+         q, k, v = map(
+             lambda t: t.unsqueeze(3)
+             .reshape(b, t.shape[1], self.heads, self.dim_head)
+             .permute(0, 2, 1, 3)
+             .reshape(b * self.heads, t.shape[1], self.dim_head)
+             .contiguous(),
+             (q, k, v),
+         )
+
+         # actually compute the attention, what we cannot get enough of
+         out = xformers.ops.memory_efficient_attention(q, k, v, attn_bias=None, op=self.attention_op)
+
+         # TODO: Use this directly in the attention operation, as a bias
+         if exists(mask):
+             raise NotImplementedError
+         out = (
+             out.unsqueeze(0)
+             .reshape(b, self.heads, out.shape[1], self.dim_head)
+             .permute(0, 2, 1, 3)
+             .reshape(b, out.shape[1], self.heads * self.dim_head)
+         )
+         return self.to_out(out)
 
 class BasicTransformerBlock(nn.Module):
-    def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True):
+    r"""
+    A basic Transformer block.
+    Parameters:
+        dim (:obj:`int`): The number of channels in the input and output.
+        n_heads (:obj:`int`): The number of heads to use for multi-head attention.
+        d_head (:obj:`int`): The number of channels in each head.
+        dropout (:obj:`float`, *optional*, defaults to 0.0): The dropout probability to use.
+        context_dim (:obj:`int`, *optional*): The size of the context vector for cross attention.
+        gated_ff (:obj:`bool`, *optional*, defaults to :obj:`False`): Whether to use a gated feed-forward network.
+        checkpoint (:obj:`bool`, *optional*, defaults to :obj:`False`): Whether to use checkpointing.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        n_heads: int,
+        d_head: int,
+        dropout=0.0,
+        context_dim: Optional[int] = None,
+        gated_ff: bool = True,
+        checkpoint: bool = True,
+    ):
         super().__init__()
-        self.attn1 = CrossAttention(query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout)  # is a self-attention
+        AttentionBuilder = MemoryEfficientCrossAttention
+        self.attn1 = AttentionBuilder(
+            query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout
+        )  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
-        self.attn2 = CrossAttention(query_dim=dim, context_dim=context_dim,
-                                    heads=n_heads, dim_head=d_head, dropout=dropout)  # is self-attn if context is none
+        self.attn2 = AttentionBuilder(
+            query_dim=dim, context_dim=context_dim, heads=n_heads, dim_head=d_head, dropout=dropout
+        )  # is self-attn if context is none
         self.norm1 = nn.LayerNorm(dim)
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def forward(self, x, context=None):
-        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
+    def _set_attention_slice(self, slice_size):
+        self.attn1._slice_size = slice_size
+        self.attn2._slice_size = slice_size
 
-    def _forward(self, x, context=None):
-        x = self.attn1(self.norm1(x)) + x
-        x = self.attn2(self.norm2(x), context=context) + x
-        x = self.ff(self.norm3(x)) + x
-        return x
+    def forward(self, hidden_states, context=None):
+        hidden_states = hidden_states.contiguous() if hidden_states.device.type == "mps" else hidden_states
+        hidden_states = self.attn1(self.norm1(hidden_states)) + hidden_states
+        hidden_states = self.attn2(self.norm2(hidden_states), context=context) + hidden_states
+        hidden_states = self.ff(self.norm3(hidden_states)) + hidden_states
+        return hidden_states
 
 
 class SpatialTransformer(nn.Module):
