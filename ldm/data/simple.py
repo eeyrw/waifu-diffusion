@@ -25,8 +25,8 @@ def GenImageSizeBuckets(h,w):
     width = 256
     bucketSet=set()
     bucketSet.add((min(h,w),min(h,w))) # Add default size
-    while width<=1024:
-        height = min(maxPixelNum//width//64*64,1024)
+    while width<=1280:
+        height = min(maxPixelNum//width//64*64,1280)
         bucketSet.add((width,height))
         bucketSet.add((height,width))
         width = width+64
@@ -70,8 +70,8 @@ class ImageInfoDs(Dataset):
             self.tform = None
         self.is_make_square = is_make_square
         self.ucg = ucg
-        self.big_buckets = GenImageSizeBuckets(832,832)
-        self.small_buckets = GenImageSizeBuckets(512,512)
+        self.big_buckets = GenImageSizeBuckets(1280,1280)
+        self.small_buckets = GenImageSizeBuckets(768,768)
 
         # assert all(['full/' + str(x.name) in self.captions for x in self.paths])
             

@@ -58,3 +58,4 @@ MANIFEST
 
 #Obsidian
 .obsidian/
+taming/modules/autoencoder/lpips/vgg.pth
