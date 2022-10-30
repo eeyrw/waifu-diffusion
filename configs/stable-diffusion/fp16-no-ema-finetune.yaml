@@ -95,7 +95,7 @@ data:
         mode: "val"
         val_split: 200
         ucg: 0.1
-        imageSquareWidthRange: [512,1280]
+        imageSquareWidthRange: [512,1088]
 
 lightning:
   callbacks:
