@@ -86,7 +86,7 @@ data:
         root_dir: '/root/autodl-tmp/FinalDs'
         mode: "train"
         ucg: 0.1 # unconditional guidance training
-        is_make_square: False
+        imageSquareWidthRange: [512,1280]
     validation:
       target: ldm.data.simple.ImageInfoDs
       params:
@@ -94,7 +94,7 @@ data:
         mode: "val"
         val_split: 200
         ucg: 0.1
-        is_make_square: False
+        imageSquareWidthRange: [512,1280]
 
 lightning:
   callbacks:

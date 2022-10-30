@@ -5,20 +5,35 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "train vae",
             "type": "python",
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal",
             "justMyCode": true,
-            "args": ["-t",
-            "--base","configs/autoencoder/autoencoder_simple.yaml",
-            "--gpus","0,",
-            "--scale_lr","False",
-            "--num_nodes","1",
-            "--logdir","/root/autodl-tmp",
-            "--max_epochs","50"
-        ]
+            "args": [
+                "-t",
+                "--base",
+                "configs/autoencoder/autoencoder_simple.yaml",
+                "--gpus",
+                "0,",
+                "--scale_lr",
+                "False",
+                "--num_nodes",
+                "1",
+                "--logdir",
+                "/root/autodl-tmp",
+                "--max_epochs",
+                "50"
+            ]
         }
     ]
 }
