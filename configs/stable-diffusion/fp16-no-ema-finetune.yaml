@@ -2,6 +2,7 @@ model:
   base_learning_rate: 7e-06
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
+    ckpt_path: /root/autodl-tmp/v1-5-pruned-no_ema.ckpt
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
@@ -49,7 +50,7 @@ model:
       params:
         embed_dim: 4
         monitor: val/rec_loss
-        ckpt_path: '/root/autodl-tmp/vae-ft-mse-840000-ema-pruned.ckpt'
+        # ckpt_path: '/root/autodl-tmp/vae-ft-mse-840000-ema-pruned.ckpt'
         ddconfig:
           double_z: true
           z_channels: 4

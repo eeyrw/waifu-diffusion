@@ -72,7 +72,6 @@ class ImageInfoDs(Dataset):
     def __getitem__(self, index):
         imageInfo = self.imageInfoList[index]
         imagePath = os.path.join(self.root_dir, imageInfo['IMG'])
-        print(imagePath)
         im = Image.open(imagePath)
         im = self.process_im(im)
         captions = imageInfo['CAP']
