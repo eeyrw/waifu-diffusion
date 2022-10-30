@@ -49,7 +49,7 @@ model:
       params:
         embed_dim: 4
         monitor: val/rec_loss
-        # ckpt_path: "../latent-diffusion/logs/original/checkpoints/last.ckpt"
+        ckpt_path: '/root/autodl-tmp/vae-ft-mse-840000-ema-pruned.ckpt'
         ddconfig:
           double_z: true
           z_channels: 4
