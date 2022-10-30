@@ -87,7 +87,7 @@ data:
         root_dir: '/root/autodl-tmp/FinalDsWds'
         mode: "train"
         ucg: 0.1 # unconditional guidance training
-        imageSquareWidthRange: [512,1280]
+        imageSquareWidthRange: [512,1088]
     validation:
       target: ldm.data.simple.ImageInfoDs
       params:
