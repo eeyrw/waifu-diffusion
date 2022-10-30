@@ -83,14 +83,14 @@ data:
     train:
       target: ldm.data.simple.ImageInfoDs
       params:
-        root_dir: '/root/autodl-tmp/FinalDs'
+        root_dir: '/root/autodl-tmp/FinalDsWds'
         mode: "train"
         ucg: 0.1 # unconditional guidance training
         imageSquareWidthRange: [512,1280]
     validation:
       target: ldm.data.simple.ImageInfoDs
       params:
-        root_dir: '/root/autodl-tmp/FinalDs'
+        root_dir: '/root/autodl-tmp/FinalDsWds'
         mode: "val"
         val_split: 200
         ucg: 0.1
