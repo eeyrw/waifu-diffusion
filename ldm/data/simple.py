@@ -48,6 +48,7 @@ class ImageInfoDs(Dataset):
         imageInfoJsonPath = os.path.join(self.root_dir, 'ImageInfo.json')
         with open(imageInfoJsonPath, "r") as f:
             self.imageInfoList = json.load(f)
+            self.imageInfoList = random.shuffle(self.imageInfoList)
 
         if mode == 'train':
             self.imageInfoList = self.imageInfoList[val_split:-1]
