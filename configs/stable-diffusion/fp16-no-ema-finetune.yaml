@@ -72,8 +72,8 @@ model:
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
       params:
-        penultimate: False # use 2nd last layer - https://arxiv.org/pdf/2205.11487.pdf D.1
-        #extended_mode: 3 # extend clip context to 225 tokens - as per NAI blogpost
+        penultimate: true # use 2nd last layer - https://arxiv.org/pdf/2205.11487.pdf D.1
+        extended_mode: 3 # extend clip context to 225 tokens - as per NAI blogpost
 
 data:
   target: main.DataModuleFromConfig
@@ -93,7 +93,7 @@ data:
       params:
         root_dir: '/root/autodl-tmp/FinalDsWds'
         mode: "val"
-        val_split: 200
+        val_split: 1000
         ucg: 0.1
         imageSquareWidthRange: [512,1088]
 
