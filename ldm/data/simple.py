@@ -50,8 +50,8 @@ class ImageInfoDs(Dataset):
             self.imageInfoList = json.load(f)
             self.imageInfoList = random.shuffle(self.imageInfoList)
 
-        if mode == 'train':
-            self.imageInfoList = self.imageInfoList[val_split:-1]
+        if mode == 'train': 
+            self.imageInfoList = self.imageInfoList[val_split:]
         else:
             self.imageInfoList = self.imageInfoList[0:val_split]
 
