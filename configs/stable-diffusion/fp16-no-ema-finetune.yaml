@@ -14,7 +14,7 @@ model:
     channels: 4
     cond_stage_trainable: false   # Note: different from the one we trained before
     conditioning_key: crossattn
-    monitor: val/loss_simple
+    monitor: val/loss
     scale_factor: 0.18215
     use_ema: False
     use_adam8bit_optmizer: True # To save VRAM
@@ -84,14 +84,14 @@ data:
     train:
       target: ldm.data.simple.ImageInfoDs
       params:
-        root_dir: '/root/autodl-tmp/FinalDsWds'
+        root_dir: '/dev/shm/FinalDsWds/'
         mode: "train"
         ucg: 0.1 # unconditional guidance training
         imageSquareWidthRange: [512,1088]
     validation:
       target: ldm.data.simple.ImageInfoDs
       params:
-        root_dir: '/root/autodl-tmp/FinalDsWds'
+        root_dir: '/dev/shm/FinalDsWds/'
         mode: "val"
         val_split: 1000
         ucg: 0.1
@@ -102,10 +102,10 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 200
+        batch_frequency: 200000000
         max_images: 1
         increase_log_steps: False
-        log_first_step: true
+        log_first_step: False
         log_images_kwargs:
           use_ema_scope: False
           inpaint: False
@@ -123,8 +123,8 @@ lightning:
       accumulate_grad_batches: 8
       fast_dev_run: False
       check_val_every_n_epoch: null
-      val_check_interval: 8000 # Real train step
+      val_check_interval: 4000 # Real train step
   modelcheckpoint:
     params:
-      every_n_train_steps: 1000 # Batch step
+      every_n_train_steps: 501 # Batch step
       save_last: true

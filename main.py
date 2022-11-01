@@ -362,11 +362,12 @@ class ImageLogger(Callback):
                 callable(pl_module.log_images) and
                 self.max_images > 0):
             logger = type(pl_module.logger)
-
+            
             is_train = pl_module.training
             if is_train:
                 pl_module.eval()
 
+            torch.cuda.empty_cache()
             with torch.no_grad():
                 with torch.autocast('cuda'):
                     images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
@@ -610,9 +611,10 @@ if __name__ == "__main__":
             "target": "pytorch_lightning.callbacks.ModelCheckpoint",
             "params": {
                 "dirpath": ckptdir,
-                "filename": "{epoch:06}-{step}",
+                "filename": "EP:{epoch}-STEP:{step}-VALLOSS:{val/loss:.3f}",
                 "verbose": True,
                 "save_last": True,
+                "auto_insert_metric_name":False
             }
         }
         if hasattr(model, "monitor"):

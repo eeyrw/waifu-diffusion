@@ -8,4 +8,5 @@ python main.py \
     --scale_lr False \
     --num_nodes 1 \
     --logdir /root/autodl-tmp \
-    --max_epochs 50
+    --max_epochs 50 \
+    --resume /root/autodl-tmp/2022-10-31T21-17-39_fp16-no-ema-finetune
