@@ -17,15 +17,21 @@ import random
 import math
 
 
-def ResizeAndCrop(minSqureWidth, maxSquareWidth, img):
-    minPixels = minSqureWidth*minSqureWidth
-    maxPixels = maxSquareWidth*maxSquareWidth
+def ResizeAndCrop(img, resizeStrategy, buckets):
+    minPixels = min(buckets)*min(buckets)
+    maxPixels = max(buckets)*max(buckets)
     img_w, img_h = img.size
-    targetPixels = random.randint(minPixels, maxPixels)
     imagePixels = img_w*img_h
     aspectRatio = img_h/img_w
-    if not imagePixels > targetPixels:
-        targetPixels = imagePixels
+    if resizeStrategy == 'random':
+        targetPixels = random.randint(minPixels, maxPixels)
+        if imagePixels < targetPixels:
+            targetPixels = imagePixels
+    elif resizeStrategy == 'maxSize':
+        targetPixels = min(imagePixels,maxPixels)
+    elif resizeStrategy == 'randomBuckets':
+        targeWidth = random.choice(buckets)
+        targetPixels = targeWidth*targeWidth
 
     resizedW = math.sqrt(targetPixels/aspectRatio)
     resizedH = resizedW*aspectRatio
@@ -43,7 +49,9 @@ def ResizeAndCrop(minSqureWidth, maxSquareWidth, img):
 
 class ImageInfoDs(Dataset):
     def __init__(self, root_dir, image_transforms=None, ucg=0.1, mode='train',
-                 val_split=10, imageSquareWidthRange=(512, 768)) -> None:
+                 val_split=10,
+                 imageSizeBuckets = (512, 768), 
+                 resizeStrategy='random') -> None:
         self.root_dir = Path(root_dir)
         imageInfoJsonPath = os.path.join(self.root_dir, 'ImageInfo.json')
         with open(imageInfoJsonPath, "r") as f:
@@ -63,7 +71,8 @@ class ImageInfoDs(Dataset):
         else:
             self.tform = None
         self.ucg = ucg
-        self.imageSquareWidthRange = imageSquareWidthRange
+        self.imageSizeBuckets = imageSizeBuckets
+        self.resizeStrategy = resizeStrategy
 
         # assert all(['full/' + str(x.name) in self.captions for x in self.paths])
 
@@ -79,13 +88,15 @@ class ImageInfoDs(Dataset):
         if captions is None or random.random() < self.ucg:
             caption = ""
         else:
-            caption = random.choice(captions)
+            if isinstance(captions,list):
+                caption = random.choice(captions)
+            elif isinstance(captions,str):
+                caption = captions
         return {"image": im, "caption": caption}
 
     def process_im(self, im):
         im = im.convert("RGB")
-        im = ResizeAndCrop(
-            self.imageSquareWidthRange[0], self.imageSquareWidthRange[1], im)
+        im = ResizeAndCrop(im,self.resizeStrategy,self.imageSizeBuckets)
         if self.tform:
             im = self.tform(im)
         im = np.array(im).astype(np.uint8)

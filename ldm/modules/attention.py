@@ -240,54 +240,74 @@ class MemoryEfficientCrossAttention(nn.Module):
          )
          return self.to_out(out)
 
-class BasicTransformerBlock(nn.Module):
-    r"""
-    A basic Transformer block.
-    Parameters:
-        dim (:obj:`int`): The number of channels in the input and output.
-        n_heads (:obj:`int`): The number of heads to use for multi-head attention.
-        d_head (:obj:`int`): The number of channels in each head.
-        dropout (:obj:`float`, *optional*, defaults to 0.0): The dropout probability to use.
-        context_dim (:obj:`int`, *optional*): The size of the context vector for cross attention.
-        gated_ff (:obj:`bool`, *optional*, defaults to :obj:`False`): Whether to use a gated feed-forward network.
-        checkpoint (:obj:`bool`, *optional*, defaults to :obj:`False`): Whether to use checkpointing.
-    """
+# class BasicTransformerBlock(nn.Module):
+#     r"""
+#     A basic Transformer block.
+#     Parameters:
+#         dim (:obj:`int`): The number of channels in the input and output.
+#         n_heads (:obj:`int`): The number of heads to use for multi-head attention.
+#         d_head (:obj:`int`): The number of channels in each head.
+#         dropout (:obj:`float`, *optional*, defaults to 0.0): The dropout probability to use.
+#         context_dim (:obj:`int`, *optional*): The size of the context vector for cross attention.
+#         gated_ff (:obj:`bool`, *optional*, defaults to :obj:`False`): Whether to use a gated feed-forward network.
+#         checkpoint (:obj:`bool`, *optional*, defaults to :obj:`False`): Whether to use checkpointing.
+#     """
 
-    def __init__(
-        self,
-        dim: int,
-        n_heads: int,
-        d_head: int,
-        dropout=0.0,
-        context_dim: Optional[int] = None,
-        gated_ff: bool = True,
-        checkpoint: bool = True,
-    ):
+#     def __init__(
+#         self,
+#         dim: int,
+#         n_heads: int,
+#         d_head: int,
+#         dropout=0.0,
+#         context_dim: Optional[int] = None,
+#         gated_ff: bool = True,
+#         checkpoint: bool = True,
+#     ):
+#         super().__init__()
+#         AttentionBuilder = MemoryEfficientCrossAttention
+#         self.attn1 = AttentionBuilder(
+#             query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout
+#         )  # is a self-attention
+#         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
+#         self.attn2 = AttentionBuilder(
+#             query_dim=dim, context_dim=context_dim, heads=n_heads, dim_head=d_head, dropout=dropout
+#         )  # is self-attn if context is none
+#         self.norm1 = nn.LayerNorm(dim)
+#         self.norm2 = nn.LayerNorm(dim)
+#         self.norm3 = nn.LayerNorm(dim)
+#         self.checkpoint = checkpoint
+
+#     def _set_attention_slice(self, slice_size):
+#         self.attn1._slice_size = slice_size
+#         self.attn2._slice_size = slice_size
+
+#     def forward(self, hidden_states, context=None):
+#         hidden_states = hidden_states.contiguous() if hidden_states.device.type == "mps" else hidden_states
+#         hidden_states = self.attn1(self.norm1(hidden_states)) + hidden_states
+#         hidden_states = self.attn2(self.norm2(hidden_states), context=context) + hidden_states
+#         hidden_states = self.ff(self.norm3(hidden_states)) + hidden_states
+#         return hidden_states
+
+class BasicTransformerBlock(nn.Module):
+    def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True):
         super().__init__()
-        AttentionBuilder = MemoryEfficientCrossAttention
-        self.attn1 = AttentionBuilder(
-            query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout
-        )  # is a self-attention
+        self.attn1 = CrossAttention(query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout)  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
-        self.attn2 = AttentionBuilder(
-            query_dim=dim, context_dim=context_dim, heads=n_heads, dim_head=d_head, dropout=dropout
-        )  # is self-attn if context is none
+        self.attn2 = CrossAttention(query_dim=dim, context_dim=context_dim,
+                                    heads=n_heads, dim_head=d_head, dropout=dropout)  # is self-attn if context is none
         self.norm1 = nn.LayerNorm(dim)
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def _set_attention_slice(self, slice_size):
-        self.attn1._slice_size = slice_size
-        self.attn2._slice_size = slice_size
+    def forward(self, x, context=None):
+        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
 
-    def forward(self, hidden_states, context=None):
-        hidden_states = hidden_states.contiguous() if hidden_states.device.type == "mps" else hidden_states
-        hidden_states = self.attn1(self.norm1(hidden_states)) + hidden_states
-        hidden_states = self.attn2(self.norm2(hidden_states), context=context) + hidden_states
-        hidden_states = self.ff(self.norm3(hidden_states)) + hidden_states
-        return hidden_states
-
+    def _forward(self, x, context=None):
+        x = self.attn1(self.norm1(x)) + x
+        x = self.attn2(self.norm2(x), context=context) + x
+        x = self.ff(self.norm3(x)) + x
+        return x
 
 class SpatialTransformer(nn.Module):
     """

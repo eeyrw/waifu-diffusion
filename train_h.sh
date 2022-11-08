@@ -1,5 +1,5 @@
-if [ ! -d "/dev/shm/FinalDsWds" ]; then
-  cp -r /root/autodl-tmp/FinalDsWds /dev/shm/
+if [ ! -d "/dev/shm/FinalDs" ]; then
+  cp -r /root/autodl-tmp/FinalDs /dev/shm/
 fi
 python main.py \
     -t \

@@ -72,8 +72,7 @@ model:
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
       params:
-        penultimate: true # use 2nd last layer - https://arxiv.org/pdf/2205.11487.pdf D.1
-        extended_mode: 3 # extend clip context to 225 tokens - as per NAI blogpost
+        penultimate: False # use 2nd last layer - https://arxiv.org/pdf/2205.11487.pdf D.1
 
 data:
   target: main.DataModuleFromConfig
@@ -84,18 +83,20 @@ data:
     train:
       target: ldm.data.simple.ImageInfoDs
       params:
-        root_dir: '/dev/shm/FinalDsWds/'
+        root_dir: '/dev/shm/FinalDs/'
         mode: "train"
         ucg: 0.1 # unconditional guidance training
-        imageSquareWidthRange: [512,1088]
+        imageSizeBuckets: [512,701]
+        resizeStrategy: randomBuckets
     validation:
       target: ldm.data.simple.ImageInfoDs
       params:
-        root_dir: '/dev/shm/FinalDsWds/'
+        root_dir: '/dev/shm/FinalDs/'
         mode: "val"
-        val_split: 1000
+        val_split: 100
         ucg: 0.1
-        imageSquareWidthRange: [512,1088]
+        imageSizeBuckets: [512,701]
+        resizeStrategy: randomBuckets
 
 lightning:
   callbacks:
@@ -120,7 +121,7 @@ lightning:
       benchmark: True
       limit_val_batches: 1.0
       num_sanity_val_steps: 0
-      accumulate_grad_batches: 8
+      accumulate_grad_batches: 4
       fast_dev_run: False
       check_val_every_n_epoch: null
       val_check_interval: 4000 # Real train step
