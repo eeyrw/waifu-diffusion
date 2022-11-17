@@ -611,7 +611,7 @@ if __name__ == "__main__":
             "target": "pytorch_lightning.callbacks.ModelCheckpoint",
             "params": {
                 "dirpath": ckptdir,
-                "filename": "EP-{epoch}-STEP-{step}-VALLOSS-{val/loss:.3f}",
+                "filename": "EP-{epoch}-STEP-{step}-VALLOSS-{train/loss_epoch:.3f}",
                 "verbose": True,
                 "save_last": True,
                 "auto_insert_metric_name":False

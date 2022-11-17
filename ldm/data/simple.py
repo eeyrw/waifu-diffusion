@@ -40,7 +40,7 @@ def ResizeAndCrop(img, resizeStrategy, buckets):
     resizedH = int(resizedH)
     resizedH64x = resizedH-resizedH % 64
     rsz = transforms.Resize(min(resizedW64x, resizedH64x),
-                            interpolation=transforms.InterpolationMode.LANCZOS)
+                            interpolation=transforms.InterpolationMode.BICUBIC)
     crp = transforms.RandomCrop((resizedH64x, resizedW64x), pad_if_needed=True)
     img = rsz(img)
     img = crp(img)
@@ -106,10 +106,11 @@ class ImageInfoDs(Dataset):
 def example():
 
     ds = ImageInfoDs(
-        root_dir='/root/autodl-tmp/FinalDsWds',
+        root_dir='/root/autodl-tmp/FinalDs',
         mode='train',
         val_split=200,
-        imageSquareWidthRange=(512, 1280)
+        resizeStrategy='maxSize',
+        imageSizeBuckets=(768, 1024)
     )
 
     for i, it in enumerate(ds):
