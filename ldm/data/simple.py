@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import Dataset
 from pathlib import Path
 import json
-from PIL import Image
+from PIL import Image, ImageOps
 from torchvision import transforms
 from einops import rearrange
 from ldm.util import instantiate_from_config
@@ -39,11 +39,10 @@ def ResizeAndCrop(img, resizeStrategy, buckets):
     resizedW64x = resizedW-resizedW % 64
     resizedH = int(resizedH)
     resizedH64x = resizedH-resizedH % 64
-    rsz = transforms.Resize(min(resizedW64x, resizedH64x),
-                            interpolation=transforms.InterpolationMode.BICUBIC)
-    crp = transforms.RandomCrop((resizedH64x, resizedW64x), pad_if_needed=True)
-    img = rsz(img)
-    img = crp(img)
+
+    img = ImageOps.fit(img, (resizedW64x, resizedH64x), method = Image.Resampling.BICUBIC,
+                   bleed = 0.0, centering =(0.5, 0.5))
+  
     return img
 
 
@@ -82,8 +81,8 @@ class ImageInfoDs(Dataset):
     def __getitem__(self, index):
         imageInfo = self.imageInfoList[index]
         imagePath = os.path.join(self.root_dir, imageInfo['IMG'])
-        im = Image.open(imagePath)
-        im = self.process_im(im)
+        im_raw = Image.open(imagePath)
+        im = self.process_im(im_raw)
         captions = imageInfo['CAP']
         if captions is None or random.random() < self.ucg:
             caption = ""
@@ -110,7 +109,7 @@ def example():
         mode='train',
         val_split=200,
         resizeStrategy='maxSize',
-        imageSizeBuckets=(768, 1024)
+        imageSizeBuckets=(1024,)
     )
 
     for i, it in enumerate(ds):
