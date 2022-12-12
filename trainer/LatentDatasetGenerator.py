@@ -502,7 +502,6 @@ if __name__ == "__main__":
 
     if args.output_bucket_info:
         print(bucket.get_bucket_info())
-        exit(0)
 
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
