@@ -166,20 +166,6 @@ class Resize():
             optimize=True
         )
 
-        try:
-            shutil.copy(
-                os.path.join(args.dataset, f'{filename}.txt'),
-                os.path.join(self.__directory, f'{filename}.txt'),
-                follow_symlinks=False
-            )
-        except (FileNotFoundError):
-            f = open(
-                os.path.join(self.__directory, f'{filename}.txt'),
-                'w',
-                encoding='UTF-8'
-            )
-            f.close()
-
         return image
 
     def __no_op(self, image_path: str, w: int, h: int) -> Img:
