@@ -465,7 +465,7 @@ def TextEncoderInference(tokenizer: CLIPTokenizer, text_encoder: CLIPTextModel, 
     else:
         max_length = tokenizer.model_max_length
         max_chunks = args.extended_mode_chunks
-        input_ids = [tokenizer([example['input_ids']], truncation=True, return_length=True, return_overflowing_tokens=False, padding=False,
+        input_ids = [tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False, padding=False,
                                add_special_tokens=False, max_length=(max_length * max_chunks) - (max_chunks * 2)).input_ids[0] for example in examples['input_ids'] if example is not None]
 
     tokens = input_ids
