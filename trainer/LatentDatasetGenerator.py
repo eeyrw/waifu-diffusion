@@ -53,6 +53,15 @@ parser.add_argument('--extended_mode_chunks', type=int, default=0, help='Enables
 
 args = parser.parse_args()
 
+def get_rank() -> int:
+    if not torch.distributed.is_initialized():
+        return 0
+    return torch.distributed.get_rank()
+
+def get_world_size() -> int:
+    if not torch.distributed.is_initialized():
+        return 1
+    return torch.distributed.get_world_size()
 
 def _sort_by_ratio(bucket: tuple) -> float:
     return bucket[0] / bucket[1]
@@ -480,6 +489,9 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
 #     input_ids = torch.stack(tuple(input_ids))
 
 if __name__ == "__main__":
+    rank = get_rank()
+    world_size = get_world_size()
+    torch.cuda.set_device(rank)
     # load dataset
     store = ImageStore(args.dataset)
     dataset = LatentDatasetGenerator(store)
