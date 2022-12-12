@@ -198,7 +198,6 @@ class ImageStore:
         with open(filename, 'r', encoding='UTF-8') as f:
             return f.read()
 
-
 # ====================================== #
 # Bucketing code stolen from hasuwoof:   #
 # https://github.com/hasuwoof/huskystack #
@@ -292,6 +291,57 @@ class AspectBucket:
 
     def get_bucket_info(self):
         return json.dumps({ "buckets": self.buckets, "bucket_ratios": self._bucket_ratios })
+        
+    def get_batch_iterator(self) -> Generator[Tuple[Tuple[int, int, int]], None, None]:
+        """
+        Generator that provides batches where the images in a batch fall on the same bucket
+
+        Each element generated will be:
+            (index, w, h)
+
+        where each image is an index into the dataset
+        :return:
+        """
+        max_bucket_len = max(len(b) for b in self.bucket_data.values())
+        index_schedule = list(range(max_bucket_len))
+        random.shuffle(index_schedule)
+
+        bucket_len_table = {
+            b: len(self.bucket_data[b]) for b in self.buckets
+        }
+
+        bucket_schedule = []
+        for i, b in enumerate(self.buckets):
+            bucket_schedule.extend([i] * (bucket_len_table[b] // self.batch_size))
+
+        random.shuffle(bucket_schedule)
+
+        bucket_pos = {
+            b: 0 for b in self.buckets
+        }
+
+        total_generated_by_bucket = {
+            b: 0 for b in self.buckets
+        }
+
+        for bucket_index in bucket_schedule:
+            b = self.buckets[bucket_index]
+            i = bucket_pos[b]
+            bucket_len = bucket_len_table[b]
+
+            batch = []
+            while len(batch) != self.batch_size:
+                # advance in the schedule until we find an index that is contained in the bucket
+                k = index_schedule[i]
+                if k < bucket_len:
+                    entry = self.bucket_data[b][k]
+                    batch.append(entry)
+
+                i += 1
+
+            total_generated_by_bucket[b] += self.batch_size
+            bucket_pos[b] = i
+            yield [(idx, *b) for idx in batch]
 
     def fill_buckets(self):
         entries = self.store.entries_iterator()
@@ -322,7 +372,22 @@ class AspectBucket:
 
         return True
 
+class AspectBucketSampler(torch.utils.data.Sampler):
+    def __init__(self, bucket: AspectBucket, num_replicas: int = 1, rank: int = 0):
+        super().__init__(None)
+        self.bucket = bucket
+        self.num_replicas = num_replicas
+        self.rank = rank
 
+    def __iter__(self):
+        # subsample the bucket to only include the elements that are assigned to this rank
+        indices = self.bucket.get_batch_iterator()
+        indices = list(indices)[self.rank::self.num_replicas]
+        return iter(indices)
+
+    def __len__(self):
+        return self.bucket.get_batch_count() // self.num_replicas
+        
 class LatentDatasetGenerator(torch.utils.data.Dataset):
     def __init__(self, store: ImageStore, 
     tokenizer: CLIPTokenizer, text_encoder: CLIPTextModel,
@@ -337,7 +402,6 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
             self.text_encoder = self.text_encoder.module
 
         self.transforms = torchvision.transforms.Compose([
-            torchvision.transforms.RandomHorizontalFlip(p=0.5),
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Normalize([0.5], [0.5])
         ])
@@ -351,10 +415,7 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
         image_file = self.store.get_image(item)
 
         return_dict['pixel_values'] = self.transforms(image_file)
-        if random.random() > self.ucg:
-            caption_file = self.store.get_caption(item)
-        else:
-            caption_file = ''
+        caption_file = self.store.get_caption(item)
 
         return_dict['input_ids'] = caption_file
         return return_dict
@@ -420,3 +481,7 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
                 'input_ids': input_ids,
                 'tokens': tokens
             }
+
+
+if __name__ == "__main__":
+    pass
