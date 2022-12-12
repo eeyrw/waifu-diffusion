@@ -393,13 +393,8 @@ class AspectBucketSampler(torch.utils.data.Sampler):
         return self.bucket.get_batch_count() // self.num_replicas
 
 class LatentDatasetGenerator(torch.utils.data.Dataset):
-    def __init__(self, store: ImageStore,
-     device: torch.device):
+    def __init__(self, store: ImageStore):
         self.store = store
-        self.device = device
-
-        if type(self.text_encoder) is torch.nn.parallel.DistributedDataParallel:
-            self.text_encoder = self.text_encoder.module
 
         self.transforms = torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
@@ -485,4 +480,21 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
 #     input_ids = torch.stack(tuple(input_ids))
 
 if __name__ == "__main__":
-    pass
+    # load dataset
+    store = ImageStore(args.dataset)
+    dataset = LatentDatasetGenerator(store)
+    bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
+    sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
+
+    print(f'STORE_LEN: {len(store)}')
+
+    if args.output_bucket_info:
+        print(bucket.get_bucket_info())
+        exit(0)
+
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_sampler=sampler,
+        num_workers=0,
+        collate_fn=dataset.collate_fn
+    )
