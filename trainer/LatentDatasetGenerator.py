@@ -349,6 +349,12 @@ class AspectBucket:
             if not self._process_entry(entry, index):
                 total_dropped += 1
 
+        for b, values in self.bucket_data.items():
+            # make sure the buckets have an exact number of elements for the batch
+            to_drop = len(values) % self.batch_size
+            self.bucket_data[b] = list(values[:len(values) - to_drop])
+            total_dropped += to_drop
+
         self.total_dropped = total_dropped
 
     def _process_entry(self, entry: Image.Image, index: int) -> bool:
