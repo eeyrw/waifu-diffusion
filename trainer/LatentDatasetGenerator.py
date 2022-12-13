@@ -559,6 +559,10 @@ if __name__ == "__main__":
         collate_fn=dataset.collate_fn
     )
 
+    device = torch.device('cuda')
+
+    print("DEVICE:", device)
+
     tokenizer = CLIPTokenizer.from_pretrained(
         args.model, subfolder='tokenizer')
     text_encoder = CLIPTextModel.from_pretrained(
@@ -566,22 +570,22 @@ if __name__ == "__main__":
     vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae')
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
-    vae = vae.to('cuda', dtype=torch.float32)
-    text_encoder.to('cuda', dtype=torch.float32)
+    vae = vae.to(device, dtype=torch.float32)
+    text_encoder.to(device, dtype=torch.float32)
     toggle = True
     for samples in tqdm.tqdm(train_dataloader):
         if toggle:
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
-                'cuda', dtype=torch.float32))
+                device, dtype=torch.float32))
 
             textIds = TextEncoderInference(
-                tokenizer, text_encoder, 'cuda', samples)
+                tokenizer, text_encoder, device, samples)
             toggle = False
         else:
             textIds = TextEncoderInference(
-                tokenizer, text_encoder, 'cuda', samples)
+                tokenizer, text_encoder, device, samples)
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
-                'cuda', dtype=torch.float32))            
+                device, dtype=torch.float32))            
             toggle = True
         print(latents.shape)
         print(textIds.shape)
