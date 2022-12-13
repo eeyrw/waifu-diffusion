@@ -619,8 +619,8 @@ if __name__ == "__main__":
         #print(textIds.shape)
         for idx,latent,textEmb in zip(samples['raw_item_index'],latents,textIds):
             tensors = {
-                "imgLatent": latent.to(torch.bfloat16),
-                "txtEmb": textEmb.to(torch.bfloat16)
+                "imgLatent": latent.to(torch.float16),
+                "txtEmb": textEmb.to(torch.float16)
             }
             fileName = '%dx%d/%d.safetensors'%(idx[1],idx[2],idx[0])
             save_file(tensors, os.path.join(args.output_dir,fileName))
