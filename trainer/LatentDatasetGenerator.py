@@ -554,7 +554,6 @@ if __name__ == "__main__":
     rank = get_rank()
     world_size = get_world_size()
     torch.cuda.set_device(rank)
-    print(rank)
     # load dataset
     store = ImageStore(args.dataset)
     dataset = LatentDatasetGenerator(store)
@@ -588,8 +587,6 @@ if __name__ == "__main__":
 
     device = torch.device('cuda')
 
-    print("DEVICE:", device)
-
     tokenizer = CLIPTokenizer.from_pretrained(
         args.model, subfolder='tokenizer',cache_dir=args.model_cache_dir)
     text_encoder = CLIPTextModel.from_pretrained(
@@ -601,6 +598,7 @@ if __name__ == "__main__":
     text_encoder.to(device, dtype=torch.float32)
     toggle = True
     totalSamples = 0
+    totalSamplesList = []
     for samples in tqdm.tqdm(train_dataloader):
         if toggle:
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
@@ -615,8 +613,6 @@ if __name__ == "__main__":
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
                 device, dtype=torch.float32))            
             toggle = True
-        #print(latents.shape)
-        #print(textIds.shape)
         for idx,latent,textEmb in zip(samples['raw_item_index'],latents,textIds):
             tensors = {
                 "imgLatent": latent.to(torch.float16),
@@ -625,4 +621,12 @@ if __name__ == "__main__":
             fileName = '%dx%d/%d.safetensors'%(idx[1],idx[2],idx[0])
             save_file(tensors, os.path.join(args.output_dir,fileName))
         totalSamples+=latents.shape[0]
-    print('Rank %d: %d'%(get_rank(),totalSamples))
+
+    if torch.distributed.is_initialized():
+        totalSamplesList.append(torch.tensor(totalSamples,device = device))
+        torch.distributed.all_reduce_multigpu(totalSamplesList,op=torch.distributed.ReduceOp.SUM)
+        print('Rank %d: %d'%(get_rank(),totalSamples))
+        if rank == 0:
+            print('Total %d'%int(totalSamplesList[0].cpu()))
+    else:
+        print('Total %d'% totalSamples)
