@@ -63,7 +63,7 @@ parser.add_argument('--model', type=str, default=None, required=True,
                     help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
 parser.add_argument('--model_cache_dir', type=str, default=None, required=True,
                     help='The name of the model cache directory')
-parser.add_argument('--output_dir', type=str, default='.', required=True,
+parser.add_argument('--output_dir', type=str, default='./latents', required=True,
                     help='The name of the model cache directory')
 
 args = parser.parse_args()
