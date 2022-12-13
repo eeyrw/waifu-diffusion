@@ -59,6 +59,8 @@ parser.add_argument('--extended_mode_chunks', type=int, default=0,
 parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
 parser.add_argument('--model', type=str, default=None, required=True,
                     help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
+parser.add_argument('--model_cache_dir', type=str, default=None, required=True,
+                    help='The name of the model cache directory')
 
 
 args = parser.parse_args()
@@ -571,10 +573,10 @@ if __name__ == "__main__":
     print("DEVICE:", device)
 
     tokenizer = CLIPTokenizer.from_pretrained(
-        args.model, subfolder='tokenizer',cache_dir='/home/songfuqiang/StableDiffusionWeight')
+        args.model, subfolder='tokenizer',cache_dir=args.model_cache_dir)
     text_encoder = CLIPTextModel.from_pretrained(
-        args.model, subfolder='text_encoder',cache_dir='/home/songfuqiang/StableDiffusionWeight')
-    vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae',cache_dir='/home/songfuqiang/StableDiffusionWeight')
+        args.model, subfolder='text_encoder',cache_dir=args.model_cache_dir)
+    vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae',cache_dir=args.model_cache_dir)
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     vae = vae.to(device, dtype=torch.float32)
