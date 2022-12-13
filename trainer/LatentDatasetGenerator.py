@@ -63,6 +63,11 @@ parser.add_argument('--model', type=str, default=None, required=True,
 
 args = parser.parse_args()
 
+def setup():
+    torch.distributed.init_process_group("nccl", init_method="env://")
+
+def cleanup():
+    torch.distributed.destroy_process_group()
 
 def get_rank() -> int:
     if not torch.distributed.is_initialized():
@@ -535,9 +540,11 @@ def VAEEncodeToLatent(vae, x):
 
 
 if __name__ == "__main__":
+    setup()
     rank = get_rank()
     world_size = get_world_size()
     torch.cuda.set_device(rank)
+    print(rank)
     # load dataset
     store = ImageStore(args.dataset)
     dataset = LatentDatasetGenerator(store)
@@ -564,10 +571,10 @@ if __name__ == "__main__":
     print("DEVICE:", device)
 
     tokenizer = CLIPTokenizer.from_pretrained(
-        args.model, subfolder='tokenizer')
+        args.model, subfolder='tokenizer',cache_dir='/home/songfuqiang/StableDiffusionWeight')
     text_encoder = CLIPTextModel.from_pretrained(
-        args.model, subfolder='text_encoder')
-    vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae')
+        args.model, subfolder='text_encoder',cache_dir='/home/songfuqiang/StableDiffusionWeight')
+    vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae',cache_dir='/home/songfuqiang/StableDiffusionWeight')
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     vae = vae.to(device, dtype=torch.float32)
