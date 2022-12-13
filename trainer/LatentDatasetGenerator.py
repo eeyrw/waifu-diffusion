@@ -1,5 +1,6 @@
 import argparse
 from math import ceil
+import platform
 import torch
 import torchvision
 import os
@@ -66,7 +67,10 @@ parser.add_argument('--model_cache_dir', type=str, default=None, required=True,
 args = parser.parse_args()
 
 def setup():
-    torch.distributed.init_process_group("nccl", init_method="env://")
+    if platform.system()=='Windows':
+        pass # Do nothing because Windows is not able to run parallel
+    elif platform.system()=='Linux':
+        torch.distributed.init_process_group("nccl", init_method="env://")
 
 def cleanup():
     torch.distributed.destroy_process_group()
