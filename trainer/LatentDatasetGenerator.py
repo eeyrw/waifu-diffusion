@@ -1,5 +1,6 @@
 import argparse
 from math import ceil
+import math
 import platform
 import torch
 import torchvision
@@ -11,7 +12,7 @@ import numpy as np
 import json
 import re
 import shutil
-
+from safetensors.torch import save_file
 
 from diffusers import AutoencoderKL
 from diffusers.optimization import get_scheduler
@@ -62,7 +63,8 @@ parser.add_argument('--model', type=str, default=None, required=True,
                     help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
 parser.add_argument('--model_cache_dir', type=str, default=None, required=True,
                     help='The name of the model cache directory')
-
+parser.add_argument('--output_dir', type=str, default='.', required=True,
+                    help='The name of the model cache directory')
 
 args = parser.parse_args()
 
@@ -431,7 +433,7 @@ class AspectBucketSampler(torch.utils.data.Sampler):
         return iter(indices)
 
     def __len__(self):
-        return self.bucket.get_batch_count() // self.num_replicas
+        return int(math.ceil(self.bucket.get_batch_count() / self.num_replicas))
 
 
 class LatentDatasetGenerator(torch.utils.data.Dataset):
@@ -455,6 +457,7 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
         caption_file = self.store.get_caption(item)
 
         return_dict['input_ids'] = caption_file
+        return_dict['raw_item_index'] = item
         return return_dict
 
     def collate_fn(self, examples):
@@ -464,7 +467,8 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
 
         return {
             'pixel_values': pixel_values,
-            'input_ids': [example['input_ids'] for example in examples if example is not None]
+            'input_ids': [example['input_ids'] for example in examples if example is not None],
+            'raw_item_index': [example['raw_item_index'] for example in examples if example is not None]
         }
 
 
@@ -565,6 +569,16 @@ if __name__ == "__main__":
         print(bucket.get_bucket_info())
         print('Num of drop samples: %d' % bucket.total_dropped)
 
+    if rank==0:
+        if not os.path.exists(args.output_dir):
+            os.mkdir(args.output_dir)    
+        for bucket in bucket.buckets:
+            sub_dir = '%dx%d'%(bucket[0],bucket[1])
+            full_dir = os.path.join(args.output_dir,sub_dir)
+            if not os.path.exists(full_dir):
+                os.mkdir(full_dir)   
+
+    
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_sampler=sampler,
@@ -586,6 +600,7 @@ if __name__ == "__main__":
     vae = vae.to(device, dtype=torch.float32)
     text_encoder.to(device, dtype=torch.float32)
     toggle = True
+    totalSamples = 0
     for samples in tqdm.tqdm(train_dataloader):
         if toggle:
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
@@ -600,5 +615,14 @@ if __name__ == "__main__":
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
                 device, dtype=torch.float32))            
             toggle = True
-        print(latents.shape)
-        print(textIds.shape)
+        #print(latents.shape)
+        #print(textIds.shape)
+        for idx,latent,textEmb in zip(samples['raw_item_index'],latents,textIds):
+            tensors = {
+                "latent": latent.to(torch.bfloat16),
+                "textEmb": textEmb.to(torch.bfloat16)
+            }
+            fileName = '%dx%d/%d.safetensors'%(idx[1],idx[2],idx[0])
+            save_file(tensors, os.path.join(args.output_dir,fileName))
+        totalSamples+=latents.shape[0]
+    print('Rank %d: %d'%(get_rank(),totalSamples))
