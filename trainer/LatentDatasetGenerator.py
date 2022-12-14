@@ -476,15 +476,12 @@ def TextEncoderInference(tokenizer: CLIPTokenizer, text_encoder: CLIPTextModel, 
     if args.extended_mode_chunks < 2:
         max_length = tokenizer.model_max_length - 2
         input_ids = [tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False,
-                               padding=False, add_special_tokens=False, max_length=max_length).input_ids for example in examples['input_ids'] if example is not None]
+                               padding='max_length', add_special_tokens=False, max_length=max_length).input_ids for example in examples['input_ids'] if example is not None]
     else:
         max_length = tokenizer.model_max_length
         max_chunks = args.extended_mode_chunks
-        input_ids = [tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False, padding=False,
+        input_ids = [tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False, padding='max_length',
                                add_special_tokens=False, max_length=(max_length * max_chunks) - (max_chunks * 2)).input_ids[0] for example in examples['input_ids'] if example is not None]
-
-    tokens = input_ids
-
     if args.extended_mode_chunks < 2:
         for i, x in enumerate(input_ids):
             for j, y in enumerate(x):
@@ -571,11 +568,11 @@ if __name__ == "__main__":
     if rank==0:
         if not os.path.exists(args.output_dir):
             os.mkdir(args.output_dir)    
-        for bucket in bucket.buckets:
-            sub_dir = '%dx%d'%(bucket[0],bucket[1])
+        for bucketItem in bucket.buckets:
+            sub_dir = '%dx%d'%(bucketItem[0],bucketItem[1])
             full_dir = os.path.join(args.output_dir,sub_dir)
             if not os.path.exists(full_dir):
-                os.mkdir(full_dir)   
+                os.mkdir(full_dir)
 
     
     train_dataloader = torch.utils.data.DataLoader(
@@ -627,6 +624,18 @@ if __name__ == "__main__":
         torch.distributed.all_reduce_multigpu(totalSamplesList,op=torch.distributed.ReduceOp.SUM)
         print('Rank %d: %d'%(get_rank(),totalSamples))
         if rank == 0:
-            print('Total %d'%int(totalSamplesList[0].cpu()))
+            totalSamples = int(totalSamplesList[0].cpu())
+            print('Total %d'%totalSamples)
     else:
         print('Total %d'% totalSamples)
+
+    if rank==0: 
+        metaJsonPath = os.path.join(args.output_dir,'LatentInfo.json')
+        latentDict = {'%dx%d'%(k[0],k[1]):v for k,v in bucket.bucket_data.items()}
+        with open(metaJsonPath,'w',encoding='utf8') as f:
+            json.dump(
+                {
+                    'NumSamples':totalSamples,
+                    'LatentDict':latentDict
+                },
+                f)
