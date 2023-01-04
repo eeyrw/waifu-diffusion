@@ -191,6 +191,7 @@ class ImageStore:
         imageInfoJsonPath = os.path.join(self.data_dir, 'ImageInfo.json')
         with open(imageInfoJsonPath, "r") as f:
             self.imageInfoList = json.load(f)
+            random.seed(a=42, version=2)
             random.shuffle(self.imageInfoList)
         self.image_files = [os.path.join(
             self.data_dir, imageInfo['IMG']) for imageInfo in self.imageInfoList]
