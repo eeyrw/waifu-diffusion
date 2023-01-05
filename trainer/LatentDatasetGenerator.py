@@ -633,6 +633,13 @@ if __name__ == "__main__":
     if rank==0: 
         metaJsonPath = os.path.join(args.output_dir,'LatentInfo.json')
         latentDict = {'%dx%d'%(k[0],k[1]):v for k,v in bucket.bucket_data.items()}
+
+        unconditionalTxtEmb = TextEncoderInference(
+                tokenizer, text_encoder, device, {'input_ids':['']})
+        tensors = {
+                "unconditionalTxtEmb": unconditionalTxtEmb.to(torch.float16)
+            }
+        save_file(tensors, os.path.join(args.output_dir,'UnconditionalTxtEmb.safetensors'))
         with open(metaJsonPath,'w',encoding='utf8') as f:
             json.dump(
                 {
