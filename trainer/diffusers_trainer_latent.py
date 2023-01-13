@@ -69,7 +69,7 @@ parser.add_argument('--adam_beta1', type=float, default=0.9, help='Adam beta1')
 parser.add_argument('--adam_beta2', type=float, default=0.999, help='Adam beta2')
 parser.add_argument('--adam_weight_decay', type=float, default=1e-2, help='Adam weight decay')
 parser.add_argument('--adam_epsilon', type=float, default=1e-08, help='Adam epsilon')
-parser.add_argument('--lr_scheduler', type=str, default='cosine', help='Learning rate scheduler [`cosine`, `linear`, `constant`]')
+parser.add_argument('--lr_scheduler', type=str, default='constant', help='Learning rate scheduler [`cosine`, `linear`, `constant`]')
 parser.add_argument('--lr_scheduler_warmup', type=float, default=0.05, help='Learning rate scheduler warmup steps. This is a percentage of the total number of steps in the training run. 0.1 means 10 percent of the total number of steps.')
 parser.add_argument('--seed', type=int, default=42, help='Seed for random number generator, this is to be used for reproduceability purposes.')
 parser.add_argument('--output_path', type=str, default='./output', help='Root path for all outputs.')
@@ -159,6 +159,7 @@ class LatentStore:
         latentInfoJsonPath = os.path.join(self.data_dir, 'LatentInfo.json')
         with open(latentInfoJsonPath, "r") as f:
             self.latentInfoDict = json.load(f)
+        self.unconditionalTxtEmb = load_file(os.path.join(self.data_dir,'UnconditionalTxtEmb.safetensors'))['unconditionalTxtEmb'][0]
 
     def __len__(self) -> int:
         return self.latentInfoDict['NumSamples']
@@ -171,6 +172,9 @@ class LatentStore:
         except FileNotFoundError:
             print(fileName)
             raise RuntimeError('Fail to load file.')
+    
+    def getUnconditionalTxtEmb(self):
+        return self.unconditionalTxtEmb
 
     def get_bucket_data(self) -> Dict[tuple, List[int]]:
         bucket_data = {}
@@ -291,8 +295,12 @@ class LatentDataset(torch.utils.data.Dataset):
     def __getitem__(self, item: Tuple[int, int, int]):
         return_dict = {}
         latentDict = self.store.get_latent(item)
+        if random.random() > self.ucg:
+            return_dict['txtEmb'] = latentDict['txtEmb']
+        else:
+            return_dict['txtEmb'] = self.store.getUnconditionalTxtEmb()
         return_dict['imgLatent'] = latentDict['imgLatent']
-        return_dict['txtEmb'] = latentDict['txtEmb']
+        
         return return_dict
 
     def collate_fn(self, examples):
@@ -492,6 +500,10 @@ def main():
 
     if args.resume:
         args.model = args.resume
+
+    if args.model[0] == '.':
+        args.model = os.path.join(
+            args.model_cache_dir, args.model[1:])
     
     tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder='tokenizer', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
     text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder='text_encoder', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
@@ -515,7 +527,7 @@ def main():
     weight_dtype = torch.float16 if args.fp16 else torch.float32
 
     # move models to device
-    # vae = vae.to(device, dtype=weight_dtype)
+    # vae = vae.to(device, dtype=weight_dtype) 
     unet = unet.to(device, dtype=torch.float32)
     # text_encoder = text_encoder.to(device, dtype=weight_dtype if not args.train_text_encoder else torch.float32)
 
@@ -694,12 +706,37 @@ def main():
                         loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
 
                         # backprop and update
+                        # scaler.scale(loss).backward()
+                        # torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+                        # scaler.step(optimizer)
+                        # scaler.update()
+                        # lr_scheduler.step()
+                        # optimizer.zero_grad()
+
                         scaler.scale(loss).backward()
-                        torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+
+                        # Unscales the gradients of optimizer's assigned params in-place
+                        scaler.unscale_(optimizer)
+
+                        # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
+                        torch.nn.utils.clip_grad_norm_(unet.parameters(), 3e4)
+
+                        # optimizer's gradients are already unscaled, so scaler.step does not unscale them,
+                        # although it still skips optimizer.step() if the gradients contain infs or NaNs.
                         scaler.step(optimizer)
+
+                        # Updates the scale for next iteration.
                         scaler.update()
+
                         lr_scheduler.step()
                         optimizer.zero_grad()
+
+                        # When not using scaler
+                        # loss.backward()
+                        # torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+                        # optimizer.step()
+                        # lr_scheduler.step()
+                        # optimizer.zero_grad()
                 # else:
                 #     with unet.join(), text_encoder.join():
                 #         # Predict the noise residual and compute loss
@@ -754,7 +791,7 @@ def main():
                     if global_step % args.image_log_steps == 0 and global_step > 0:
                         if rank == 0:
                             # get prompt from random batch
-                            prompt = tokenizer.decode(batch['tokens'][random.randint(0, len(batch['tokens'])-1)])
+                            prompt = '' #tokenizer.decode(batch['tokens'][random.randint(0, len(batch['tokens'])-1)])
 
                             if args.image_log_scheduler == 'DDIMScheduler':
                                 print('using DDIMScheduler scheduler')
@@ -790,8 +827,8 @@ def main():
                                             )
                                         else:
                                             from datetime import datetime
-                                            images = pipeline(prompt, num_inference_steps=args.image_log_inference_steps).images[0]
-                                            filenameImg = str(time.time_ns()) + ".png"
+                                            images = pipeline(prompt, num_inference_steps=args.image_log_inference_steps,width=768,height=1024).images[0]
+                                            filenameImg = str(time.time_ns()) + ".jpg"
                                             filenameTxt = str(time.time_ns()) + ".txt"
                                             images.save(saveInferencePath + "/" + filenameImg)
                                             with open(saveInferencePath + "/" + filenameTxt, 'a') as f:
