@@ -644,6 +644,8 @@ if __name__ == "__main__":
             json.dump(
                 {
                     'NumSamples':totalSamples,
-                    'LatentDict':latentDict
+                    'LatentDict':latentDict,
+                    'Resolution':args.resolution,
+                    'Model':args.model,
                 },
                 f)
