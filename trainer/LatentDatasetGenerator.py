@@ -16,13 +16,14 @@ from safetensors.torch import save_file
 
 from diffusers import AutoencoderKL
 from diffusers.optimization import get_scheduler
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer, GPTNeoModel, GPT2Tokenizer, AutoTokenizer, T5Tokenizer, T5EncoderModel
 from PIL import Image, ImageOps
 from PIL.Image import Image as Img
 
 from typing import Dict, List, Generator, Tuple
 from scipy.interpolate import interp1d
-
+from pillow_heif import register_heif_opener
+register_heif_opener()
 # defaults should be good for everyone
 # TODO: add custom VAE support. should be simple with diffusers
 
@@ -65,6 +66,8 @@ parser.add_argument('--model_cache_dir', type=str, default=None, required=True,
                     help='The name of the model cache directory')
 parser.add_argument('--output_dir', type=str, default='./latents', required=True,
                     help='The name of the model cache directory')
+parser.add_argument('--text_encoder', type=str, default='CLIP', required=True,
+                    help='The text encoder used, can be CLIP,GPT1.3B,T5v11-L')
 
 args = parser.parse_args()
 
@@ -472,73 +475,139 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
             'raw_item_index': [example['raw_item_index'] for example in examples if example is not None]
         }
 
-
-def TextEncoderInference(tokenizer: CLIPTokenizer, text_encoder: CLIPTextModel, device, examples):
-    if args.extended_mode_chunks < 2:
-        max_length = tokenizer.model_max_length - 2
-        input_ids = [tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False,
-                               padding='max_length', add_special_tokens=False, max_length=max_length).input_ids for example in examples['input_ids'] if example is not None]
-    else:
-        max_length = tokenizer.model_max_length
-        max_chunks = args.extended_mode_chunks
-        input_ids = [tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False, padding='max_length',
-                               add_special_tokens=False, max_length=(max_length * max_chunks) - (max_chunks * 2)).input_ids[0] for example in examples['input_ids'] if example is not None]
-    if args.extended_mode_chunks < 2:
-        for i, x in enumerate(input_ids):
-            for j, y in enumerate(x):
-                input_ids[i][j] = [tokenizer.bos_token_id, *y, *np.full(
-                    (tokenizer.model_max_length - len(y) - 1), tokenizer.eos_token_id)]
-
-        if args.clip_penultimate:
-            input_ids = [text_encoder.text_model.final_layer_norm(text_encoder(torch.asarray(input_id).to(
-                device), output_hidden_states=True)['hidden_states'][-2])[0] for input_id in input_ids]
+class TextEncoderGen:
+    def __init__(self,args) -> None:
+        self.textEncoderName = args.text_encoder
+        self.args = args
+        if self.textEncoderName == 'CLIP':
+            self.tokenizer = CLIPTokenizer.from_pretrained(
+                args.model, subfolder='tokenizer',cache_dir=args.model_cache_dir)
+            self.text_encoder = CLIPTextModel.from_pretrained(
+                args.model, subfolder='text_encoder',cache_dir=args.model_cache_dir)
+        elif self.textEncoderName == 'GPT1.3B':
+            self.tokenizer = GPT2Tokenizer.from_pretrained("EleutherAI/gpt-neo-1.3B",cache_dir = args.model_cache_dir)
+            self.text_encoder = GPTNeoModel.from_pretrained("EleutherAI/gpt-neo-1.3B",cache_dir = args.model_cache_dir)
+        elif self.textEncoderName == 'T5v11-L':
+            self.tokenizer = T5Tokenizer.from_pretrained("google/t5-v1_1-large",cache_dir = args.model_cache_dir)
+            self.text_encoder = T5EncoderModel.from_pretrained("google/t5-v1_1-large",cache_dir = args.model_cache_dir)
         else:
-            input_ids = [text_encoder(torch.asarray(input_id).to(
-                device), output_hidden_states=True).last_hidden_state[0] for input_id in input_ids]
-    else:
-        max_standard_tokens = max_length - 2
-        max_chunks = args.extended_mode_chunks
-        max_len = np.ceil(max(len(x) for x in input_ids) /
-                          max_standard_tokens).astype(int).item() * max_standard_tokens
-        if max_len > max_standard_tokens:
-            z = None
-            for i, x in enumerate(input_ids):
-                if len(x) < max_len:
-                    input_ids[i] = [
-                        *x, *np.full((max_len - len(x)), tokenizer.eos_token_id)]
-            batch_t = torch.tensor(input_ids)
-            chunks = [batch_t[:, i:i + max_standard_tokens]
-                      for i in range(0, max_len, max_standard_tokens)]
-            for chunk in chunks:
-                chunk = torch.cat((torch.full((chunk.shape[0], 1), tokenizer.bos_token_id), chunk, torch.full(
-                    (chunk.shape[0], 1), tokenizer.eos_token_id)), 1)
-                if z is None:
-                    if args.clip_penultimate:
-                        z = text_encoder.text_model.final_layer_norm(text_encoder(
-                            chunk.to(device), output_hidden_states=True)['hidden_states'][-2])
-                    else:
-                        z = text_encoder(
-                            chunk.to(device), output_hidden_states=True).last_hidden_state
+            raise RuntimeError('Unknown text encoder: %s'%args.text_encoder)     
+    def inference(self,examples):
+        if self.textEncoderName == 'CLIP':
+            return self.textEncoderInferenceCLIP(examples)
+        elif self.textEncoderName == 'GPT1.3B':
+            return self.textEncoderInferenceGPT(examples)
+        elif self.textEncoderName == 'T5v11-L':
+            return self.textEncoderInferenceT5v11(examples)
+
+    def textEncoderInferenceT5v11(self, examples):
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        max_length = 200 #self.tokenizer.model_max_length - 2
+        input_ids = []
+        for example in examples['input_ids']:
+            if example is not None:
+                if example!='':
+                    input_ids.append(self.tokenizer([example],truncation=True, return_length=True, return_overflowing_tokens=False, add_special_tokens=False, max_length=max_length).input_ids)
                 else:
-                    if args.clip_penultimate:
-                        z = torch.cat((z, text_encoder.text_model.final_layer_norm(text_encoder(
-                            chunk.to(device), output_hidden_states=True)['hidden_states'][-2])), dim=-2)
-                    else:
-                        z = torch.cat((z, text_encoder(
-                            chunk.to(device), output_hidden_states=True).last_hidden_state), dim=-2)
-            input_ids = z
+                    input_ids.append(self.tokenizer([example],padding='max_length',truncation=True, return_length=True, return_overflowing_tokens=False, add_special_tokens=False, max_length=50).input_ids)
+
+        if self.args.clip_penultimate:
+            input_ids = [self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(input_id).to(
+                self.text_encoder.device), output_hidden_states=True)['hidden_states'][-2])[0] for input_id in input_ids]
         else:
+            input_ids = [self.text_encoder(torch.asarray(input_id).to(
+                self.text_encoder.device), output_hidden_states=True).last_hidden_state[0] for input_id in input_ids]
+
+        # input_ids = torch.stack(tuple(input_ids))
+        return input_ids
+
+    def textEncoderInferenceGPT(self, examples):
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        max_length = 200 #self.tokenizer.model_max_length - 2
+        input_ids = []
+        for example in examples['input_ids']:
+            if example is not None:
+                if example!='':
+                    input_ids.append(self.tokenizer([example],truncation=True, return_length=True, return_overflowing_tokens=False, add_special_tokens=False, max_length=max_length).input_ids)
+                else:
+                    input_ids.append(self.tokenizer([example],padding='max_length',truncation=True, return_length=True, return_overflowing_tokens=False, add_special_tokens=False, max_length=50).input_ids)
+
+        if self.args.clip_penultimate:
+            input_ids = [self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(input_id).to(
+                self.text_encoder.device), output_hidden_states=True)['hidden_states'][-2])[0] for input_id in input_ids]
+        else:
+            input_ids = [self.text_encoder(torch.asarray(input_id).to(
+                self.text_encoder.device), output_hidden_states=True).last_hidden_state[0] for input_id in input_ids]
+
+        # input_ids = torch.stack(tuple(input_ids))
+        return input_ids
+
+    def textEncoderInferenceCLIP(self, examples):
+        if self.args.extended_mode_chunks < 2:
+            max_length = self.tokenizer.model_max_length - 2
+            input_ids = [self.tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False,
+                                padding='max_length', add_special_tokens=False, max_length=max_length).input_ids for example in examples['input_ids'] if example is not None]
+        else:
+            max_length = self.tokenizer.model_max_length
+            max_chunks = self.args.extended_mode_chunks
+            input_ids = [self.tokenizer([example], truncation=True, return_length=True, return_overflowing_tokens=False, padding='max_length',
+                                add_special_tokens=False, max_length=(max_length * max_chunks) - (max_chunks * 2)).input_ids[0] for example in examples['input_ids'] if example is not None]
+        if self.args.extended_mode_chunks < 2:
             for i, x in enumerate(input_ids):
-                input_ids[i] = [tokenizer.bos_token_id, *x, *np.full(
-                    (tokenizer.model_max_length - len(x) - 1), tokenizer.eos_token_id)]
-            if args.clip_penultimate:
-                input_ids = text_encoder.text_model.final_layer_norm(text_encoder(torch.asarray(
-                    input_ids).to(device), output_hidden_states=True)['hidden_states'][-2])
+                for j, y in enumerate(x):
+                    input_ids[i][j] = [self.tokenizer.bos_token_id, *y, *np.full(
+                        (self.tokenizer.model_max_length - len(y) - 1), self.tokenizer.eos_token_id)]
+
+            if self.args.clip_penultimate:
+                input_ids = [self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(input_id).to(
+                    self.text_encoder.device), output_hidden_states=True)['hidden_states'][-2])[0] for input_id in input_ids]
             else:
-                input_ids = text_encoder(torch.asarray(input_ids).to(
-                    device), output_hidden_states=True).last_hidden_state
-    input_ids = torch.stack(tuple(input_ids))
-    return input_ids
+                input_ids = [self.text_encoder(torch.asarray(input_id).to(
+                    self.text_encoder.device), output_hidden_states=True).last_hidden_state[0] for input_id in input_ids]
+        else:
+            max_standard_tokens = max_length - 2
+            max_chunks = args.extended_mode_chunks
+            max_len = np.ceil(max(len(x) for x in input_ids) /
+                            max_standard_tokens).astype(int).item() * max_standard_tokens
+            if max_len > max_standard_tokens:
+                z = None
+                for i, x in enumerate(input_ids):
+                    if len(x) < max_len:
+                        input_ids[i] = [
+                            *x, *np.full((max_len - len(x)), self.tokenizer.eos_token_id)]
+                batch_t = torch.tensor(input_ids)
+                chunks = [batch_t[:, i:i + max_standard_tokens]
+                        for i in range(0, max_len, max_standard_tokens)]
+                for chunk in chunks:
+                    chunk = torch.cat((torch.full((chunk.shape[0], 1), self.tokenizer.bos_token_id), chunk, torch.full(
+                        (chunk.shape[0], 1), self.tokenizer.eos_token_id)), 1)
+                    if z is None:
+                        if self.args.clip_penultimate:
+                            z = self.text_encoder.text_model.final_layer_norm(self.text_encoder(
+                                chunk.to(self.text_encoder.device), output_hidden_states=True)['hidden_states'][-2])
+                        else:
+                            z = self.text_encoder(
+                                chunk.to(self.text_encoder.device), output_hidden_states=True).last_hidden_state
+                    else:
+                        if self.args.clip_penultimate:
+                            z = torch.cat((z, self.text_encoder.text_model.final_layer_norm(self.text_encoder(
+                                chunk.to(self.text_encoder.device), output_hidden_states=True)['hidden_states'][-2])), dim=-2)
+                        else:
+                            z = torch.cat((z, self.text_encoder(
+                                chunk.to(self.text_encoder.device), output_hidden_states=True).last_hidden_state), dim=-2)
+                input_ids = z
+            else:
+                for i, x in enumerate(input_ids):
+                    input_ids[i] = [self.tokenizer.bos_token_id, *x, *np.full(
+                        (self.tokenizer.model_max_length - len(x) - 1), self.tokenizer.eos_token_id)]
+                if self.args.clip_penultimate:
+                    input_ids = self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(
+                        input_ids).to(self.text_encoder.device), output_hidden_states=True)['hidden_states'][-2])
+                else:
+                    input_ids = self.text_encoder(torch.asarray(input_ids).to(
+                        self.text_encoder.device), output_hidden_states=True).last_hidden_state
+        input_ids = torch.stack(tuple(input_ids))
+        return input_ids
 
 
 def VAEEncodeToLatent(vae, x):
@@ -585,15 +654,23 @@ if __name__ == "__main__":
 
     device = torch.device('cuda')
 
-    tokenizer = CLIPTokenizer.from_pretrained(
-        args.model, subfolder='tokenizer',cache_dir=args.model_cache_dir)
-    text_encoder = CLIPTextModel.from_pretrained(
-        args.model, subfolder='text_encoder',cache_dir=args.model_cache_dir)
+    # if args.text_encoder == 'CLIP':
+    #     tokenizer = CLIPTokenizer.from_pretrained(
+    #         args.model, subfolder='tokenizer',cache_dir=args.model_cache_dir)
+    #     text_encoder = CLIPTextModel.from_pretrained(
+    #         args.model, subfolder='text_encoder',cache_dir=args.model_cache_dir)
+    # elif args.text_encoder == 'GPT1.3B':
+    #     tokenizer = GPT2Tokenizer.from_pretrained("EleutherAI/gpt-neo-1.3B",cache_dir = args.model_cache_dir)
+    #     text_encoder = GPTNeoModel.from_pretrained("EleutherAI/gpt-neo-1.3B",cache_dir = args.model_cache_dir)
+
+    textEncoderGen = TextEncoderGen(args)
+
+   
     vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae',cache_dir=args.model_cache_dir)
     vae.requires_grad_(False)
-    text_encoder.requires_grad_(False)
+    textEncoderGen.text_encoder.requires_grad_(False)
     vae = vae.to(device, dtype=torch.float32)
-    text_encoder.to(device, dtype=torch.float32)
+    textEncoderGen.text_encoder.to(device, dtype=torch.float16)
     toggle = True
     totalSamples = 0
     totalSamplesList = []
@@ -602,12 +679,10 @@ if __name__ == "__main__":
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
                 device, dtype=torch.float32))
 
-            textIds = TextEncoderInference(
-                tokenizer, text_encoder, device, samples)
+            textIds = textEncoderGen.inference(samples)
             toggle = False
         else:
-            textIds = TextEncoderInference(
-                tokenizer, text_encoder, device, samples)
+            textIds =textEncoderGen.inference(samples)
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
                 device, dtype=torch.float32))            
             toggle = True
@@ -634,8 +709,7 @@ if __name__ == "__main__":
         metaJsonPath = os.path.join(args.output_dir,'LatentInfo.json')
         latentDict = {'%dx%d'%(k[0],k[1]):v for k,v in bucket.bucket_data.items()}
 
-        unconditionalTxtEmb = TextEncoderInference(
-                tokenizer, text_encoder, device, {'input_ids':['']})
+        unconditionalTxtEmb =textEncoderGen.inference({'input_ids':['']})[0]
         tensors = {
                 "unconditionalTxtEmb": unconditionalTxtEmb.to(torch.float16)
             }
@@ -643,6 +717,7 @@ if __name__ == "__main__":
         with open(metaJsonPath,'w',encoding='utf8') as f:
             json.dump(
                 {
+                    'TextEncoder':args.text_encoder,
                     'NumSamples':totalSamples,
                     'LatentDict':latentDict,
                     'Resolution':args.resolution,

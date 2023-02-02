@@ -97,6 +97,8 @@ parser.add_argument("--train_text_encoder", action="store_true", help="Whether t
 parser.add_argument('--model_cache_dir', type=str, default=None, required=True,
                     help='The name of the model cache directory')
 parser.add_argument('--debug', dest='debug', type=bool_t, default='False', help='Enable WeightsAndBiases Reporting')
+parser.add_argument('--train_from_scratch', dest='train_from_scratch', type=bool_t, default='False', help='Whether train from scratch')
+parser.add_argument('--use_grad_clip', dest='use_grad_clip', type=bool_t, default='False', help='Whether train from scratch')
 
 
 args = parser.parse_args()
@@ -159,7 +161,7 @@ class LatentStore:
         latentInfoJsonPath = os.path.join(self.data_dir, 'LatentInfo.json')
         with open(latentInfoJsonPath, "r") as f:
             self.latentInfoDict = json.load(f)
-        self.unconditionalTxtEmb = load_file(os.path.join(self.data_dir,'UnconditionalTxtEmb.safetensors'))['unconditionalTxtEmb'][0]
+        self.unconditionalTxtEmb = load_file(os.path.join(self.data_dir,'UnconditionalTxtEmb.safetensors'))['unconditionalTxtEmb']
 
     def __len__(self) -> int:
         return self.latentInfoDict['NumSamples']
@@ -504,11 +506,64 @@ def main():
     if args.model[0] == '.':
         args.model = os.path.join(
             args.model_cache_dir, args.model[1:])
-    
-    tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder='tokenizer', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
-    text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder='text_encoder', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
-    vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
-    unet = UNet2DConditionModel.from_pretrained(args.model, subfolder='unet', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
+
+    if args.train_from_scratch:
+        unet = UNet2DConditionModel.from_config({
+            "_class_name": "UNet2DConditionModel",
+            "_diffusers_version": "0.11.1",
+            "_name_or_path": "stabilityai/stable-diffusion-2-1",
+            "act_fn": "silu",
+            "attention_head_dim": [
+                5,
+                10,
+                20,
+                20
+            ],
+            "block_out_channels": [
+                320,
+                640,
+                1280,
+                1280
+            ],
+            "center_input_sample": False,
+            "class_embed_type": None,
+            "cross_attention_dim": 1024,
+            "down_block_types": [
+                "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D",
+                "DownBlock2D"
+            ],
+            "downsample_padding": 1,
+            "dual_cross_attention": False,
+            "flip_sin_to_cos": True,
+            "freq_shift": 0,
+            "in_channels": 4,
+            "layers_per_block": 2,
+            "mid_block_scale_factor": 1,
+            "mid_block_type": "UNetMidBlock2DCrossAttn",
+            "norm_eps": 1e-05,
+            "norm_num_groups": 32,
+            "num_class_embeds": None,
+            "only_cross_attention": False,
+            "out_channels": 4,
+            "resnet_time_scale_shift": "default",
+            "sample_size": 96,
+            "up_block_types": [
+                "UpBlock2D",
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D"
+            ],
+            "upcast_attention": True,
+            "use_linear_projection": True
+            }
+        )
+    else:
+        tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder='tokenizer', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
+        text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder='text_encoder', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
+        vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
+        unet = UNet2DConditionModel.from_pretrained(args.model, subfolder='unet', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
 
     # Freeze vae and text_encoder
     # vae.requires_grad_(False)
@@ -715,11 +770,11 @@ def main():
 
                         scaler.scale(loss).backward()
 
-                        # Unscales the gradients of optimizer's assigned params in-place
-                        scaler.unscale_(optimizer)
-
-                        # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
-                        torch.nn.utils.clip_grad_norm_(unet.parameters(), 3e4)
+                        if args.use_grad_clip:
+                            # Unscales the gradients of optimizer's assigned params in-place
+                            scaler.unscale_(optimizer)
+                            # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
+                            torch.nn.utils.clip_grad_norm_(unet.parameters(), 1e6)
 
                         # optimizer's gradients are already unscaled, so scaler.step does not unscale them,
                         # although it still skips optimizer.step() if the gradients contain infs or NaNs.
