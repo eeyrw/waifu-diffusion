@@ -41,6 +41,8 @@ parser.add_argument('--bucket_side_min', type=int, default=256,
                     help='The minimum side length of a bucket.')
 parser.add_argument('--bucket_side_max', type=int, default=2048,
                     help='The maximum side length of a bucket.')
+parser.add_argument('--bucket_mode', type=str, default='multiscale',
+                    help='multiscale|maxfit')
 parser.add_argument('--resolution', type=int, default=512,
                     help='Image resolution to train against. Lower res images will be scaled up to this resolution and higher res images will be scaled down.')
 parser.add_argument('--clip_penultimate', type=bool_t, default='False',
@@ -248,6 +250,7 @@ class AspectBucket:
                  bucket_side_min: int = 256,
                  bucket_side_max: int = 768,
                  bucket_side_increment: int = 64,
+                 bucket_mode: str = 'multiscale',
                  max_image_area: int = 512 * 768,
                  max_ratio: float = 2):
 
@@ -255,6 +258,7 @@ class AspectBucket:
         self.bucket_length_min = bucket_side_min
         self.bucket_length_max = bucket_side_max
         self.bucket_increment = bucket_side_increment
+        self.bucket_mode = bucket_mode
         self.max_image_area = max_image_area
         self.batch_size = batch_size
         self.total_dropped = 0
@@ -272,11 +276,36 @@ class AspectBucket:
         self.init_buckets()
         self.fill_buckets()
 
+    def get_buckets(self,mode):
+        if mode == 'maxfit':
+            # https://blog.novelai.net/novelai-improvements-on-stable-diffusion-e10d38db82ac
+            # ● Set the width to 256.
+            # ● While the width is less than or equal to 1024:
+            # • Find the largest height such that height is less than or equal to 1024 and that width multiplied by height is less than or equal to 512 * 768.
+            # • Add the resolution given by height and width as a bucket.
+            # • Increase the width by 64.
+
+            maxPixelNum =self.max_image_area
+            width = self.bucket_length_min
+            bucketSet=set()
+            #bucketSet.add((min(h,w),min(h,w))) # Add default size
+            while width<=self.bucket_length_max:
+                height = min(maxPixelNum//width//64*64,self.bucket_length_max)
+                #if  max(width,height) / min(width,height) <= self.max_ratio:
+                bucketSet.add((width,height))
+                bucketSet.add((height,width))
+                width = width+64
+            possible_buckets = list(bucketSet)
+        elif mode == 'multiscale':
+            possible_lengths = list(
+                range(self.bucket_length_min, self.bucket_length_max + 1, self.bucket_increment))
+            possible_buckets = list((w, h) for w, h in itertools.product(possible_lengths, possible_lengths)
+                                    if w >= h and w * h <= self.max_image_area and w / h <= self.max_ratio)
+        return possible_buckets
+
     def init_buckets(self):
-        possible_lengths = list(
-            range(self.bucket_length_min, self.bucket_length_max + 1, self.bucket_increment))
-        possible_buckets = list((w, h) for w, h in itertools.product(possible_lengths, possible_lengths)
-                                if w >= h and w * h <= self.max_image_area and w / h <= self.max_ratio)
+
+        possible_buckets = self.get_buckets(self.bucket_mode)
 
         buckets_by_ratio = {}
 
@@ -625,7 +654,7 @@ if __name__ == "__main__":
     store = ImageStore(args.dataset)
     dataset = LatentDatasetGenerator(store)
     bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min,
-                          args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
+                          args.bucket_side_max, 64, args.bucket_mode, args.resolution * args.resolution, 2.0)
     sampler = AspectBucketSampler(
         bucket=bucket, num_replicas=world_size, rank=rank)
 

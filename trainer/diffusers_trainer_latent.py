@@ -463,7 +463,7 @@ def main():
         if args.hf_token is not None:
             os.environ['HF_API_TOKEN'] = args.hf_token
             args.hf_token = None
-        run = wandb.init(project=args.project_id, name=args.run_name, config=vars(args), dir=args.output_path+'/wandb', mode=mode)
+        run = wandb.init(project=args.project_id, name=args.run_name, config=vars(args), dir=os.path.abspath(args.output_path), mode=mode)
 
         # Inform the user of host, and various versions -- useful for debugging issues.
         print("RUN_NAME:", args.run_name)
@@ -559,6 +559,9 @@ def main():
             "use_linear_projection": True
             }
         )
+        tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder='tokenizer', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
+        text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder='text_encoder', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
+        vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
     else:
         tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder='tokenizer', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
         text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder='text_encoder', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
