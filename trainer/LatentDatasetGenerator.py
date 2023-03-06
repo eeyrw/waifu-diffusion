@@ -235,6 +235,10 @@ class ImageStore:
                 caption = random.choice(captions)
             elif isinstance(captions, str):
                 caption = captions
+            if 'artist' in self.imageInfoList[ref[0]].keys():
+                caption = 'by artist '+ self.imageInfoList[ref[0]]['artist'] + caption
+            if 'style' in self.imageInfoList[ref[0]].keys():
+                caption = 'in style of '+ self.imageInfoList[ref[0]]['style'] + caption
         return caption
 
 # ====================================== #
