@@ -227,7 +227,11 @@ class ImageStore:
 
     # gets caption by removing the extension from the filename and replacing it with .txt
     def get_caption(self, ref: Tuple[int, int, int]) -> str:
-        captions = self.imageInfoList[ref[0]]['CAP']
+        if 'CAP' in self.imageInfoList[ref[0]].keys():
+            captions = self.imageInfoList[ref[0]]['CAP']
+        else:
+            captions = None
+            print(self.imageInfoList[ref[0]]['IMG'])
         if captions is None:
             caption = ""
         else:
