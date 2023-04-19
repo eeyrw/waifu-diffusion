@@ -196,8 +196,8 @@ class ImageStore:
         imageInfoJsonPath = os.path.join(self.data_dir, 'ImageInfo.json')
         with open(imageInfoJsonPath, "r") as f:
             self.imageInfoList = json.load(f)
-            random.seed(a=42, version=2)
-            random.shuffle(self.imageInfoList)
+            # random.seed(a=42, version=2)
+            # random.shuffle(self.imageInfoList)
         self.image_files = [os.path.join(
             self.data_dir, imageInfo['IMG']) for imageInfo in self.imageInfoList]
         self.validator = Validation(
@@ -227,6 +227,24 @@ class ImageStore:
 
     # gets caption by removing the extension from the filename and replacing it with .txt
     def get_caption(self, ref: Tuple[int, int, int]) -> str:
+        qualityDescList = []
+        isNegativeSample = False
+        if 'Q512' in self.imageInfoList[ref[0]].keys():
+            Q = self.imageInfoList[ref[0]]['Q512']
+            if Q>65:
+                qualityDescList.append('high res,best quality')
+            elif Q<50:
+                qualityDescList.append('low res,low quality')
+                isNegativeSample = True
+
+        if 'A' in self.imageInfoList[ref[0]].keys():
+            A = self.imageInfoList[ref[0]]['A']
+            if A>5.5:
+                qualityDescList.append('masterpiece')
+            elif A<3:
+                qualityDescList.append('bad art')
+                isNegativeSample = True
+
         if 'CAP' in self.imageInfoList[ref[0]].keys():
             captions = self.imageInfoList[ref[0]]['CAP']
         else:
@@ -243,7 +261,10 @@ class ImageStore:
                 caption = 'by artist '+ self.imageInfoList[ref[0]]['artist'] + caption
             if 'style' in self.imageInfoList[ref[0]].keys():
                 caption = 'in style of '+ self.imageInfoList[ref[0]]['style'] + caption
-        return caption
+            
+            
+        caption = ','.join(qualityDescList)+',' + caption
+        return caption,isNegativeSample
 
 # ====================================== #
 # Bucketing code stolen from hasuwoof:   #
@@ -495,10 +516,11 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
         image_file = self.store.get_image(item)
 
         return_dict['pixel_values'] = self.transforms(image_file)
-        caption_file = self.store.get_caption(item)
+        caption_file,isNegativeSample = self.store.get_caption(item)
 
         return_dict['input_ids'] = caption_file
         return_dict['raw_item_index'] = item
+        return_dict['isNegativeSample'] = isNegativeSample
         return return_dict
 
     def collate_fn(self, examples):
@@ -509,7 +531,8 @@ class LatentDatasetGenerator(torch.utils.data.Dataset):
         return {
             'pixel_values': pixel_values,
             'input_ids': [example['input_ids'] for example in examples if example is not None],
-            'raw_item_index': [example['raw_item_index'] for example in examples if example is not None]
+            'raw_item_index': [example['raw_item_index'] for example in examples if example is not None],
+            'isNegativeSample': [example['isNegativeSample'] for example in examples if example is not None]
         }
 
 class TextEncoderGen:
@@ -723,10 +746,11 @@ if __name__ == "__main__":
             latents = VAEEncodeToLatent(vae, samples['pixel_values'].to(
                 device, dtype=torch.float32))            
             toggle = True
-        for idx,latent,textEmb in zip(samples['raw_item_index'],latents,textIds):
+        for idx,isNegativeSample,latent,textEmb in zip(samples['raw_item_index'],samples['isNegativeSample'],latents,textIds):
             tensors = {
                 "imgLatent": latent.to(torch.float16),
-                "txtEmb": textEmb.to(torch.float16)
+                "txtEmb": textEmb.to(torch.float16),
+                "isNegativeSample":torch.tensor(isNegativeSample,dtype=torch.bool)
             }
             fileName = '%dx%d/%d.safetensors'%(idx[1],idx[2],idx[0])
             save_file(tensors, os.path.join(args.output_dir,fileName))

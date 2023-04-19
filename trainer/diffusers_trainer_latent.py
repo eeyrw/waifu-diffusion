@@ -6,6 +6,7 @@
 # Multiple GPUs: torchrun --nproc_per_node=N trainer/diffusers_trainer.py --model="CompVis/stable-diffusion-v1-4" --run_name="liminal" --dataset="liminal-dataset" --hf_token="hf_blablabla" --bucket_side_min=64 --use_8bit_adam=True --gradient_checkpointing=True --batch_size=10 --fp16=True --image_log_steps=250 --epochs=20 --resolution=768 --use_ema=True
 
 import argparse
+import signal
 import socket
 import torch
 import torchvision
@@ -154,6 +155,14 @@ def get_gpu_ram() -> str:
            f"{gpu_str}" \
            f"{torch_str}"
 
+isCancelled = False
+def handler(signum, frame):
+    global isCancelled
+    print('Signal handler called with signal', signum)
+    isCancelled = True
+
+signal.signal(signal.SIGINT, handler)
+
 
 class LatentStore:
     def __init__(self, data_dir: str) -> None:
@@ -297,7 +306,7 @@ class LatentDataset(torch.utils.data.Dataset):
     def __getitem__(self, item: Tuple[int, int, int]):
         return_dict = {}
         latentDict = self.store.get_latent(item)
-        if random.random() > self.ucg:
+        if random.random() > self.ucg or latentDict['isNegativeSample']:
             return_dict['txtEmb'] = latentDict['txtEmb']
         else:
             return_dict['txtEmb'] = self.store.getUnconditionalTxtEmb()
@@ -314,7 +323,7 @@ class LatentDataset(torch.utils.data.Dataset):
         txtEmbs.to(memory_format=torch.contiguous_format).float()
         return {
             'imgLatents': imgLatents,
-            'txtEmbs': txtEmbs,
+            'txtEmbs': txtEmbs
         }
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
@@ -510,15 +519,9 @@ def main():
     if args.train_from_scratch:
         unet = UNet2DConditionModel.from_config({
             "_class_name": "UNet2DConditionModel",
-            "_diffusers_version": "0.11.1",
-            "_name_or_path": "stabilityai/stable-diffusion-2-1",
+            "_diffusers_version": "0.6.0",
             "act_fn": "silu",
-            "attention_head_dim": [
-                5,
-                10,
-                20,
-                20
-            ],
+            "attention_head_dim": 8,
             "block_out_channels": [
                 320,
                 640,
@@ -526,8 +529,7 @@ def main():
                 1280
             ],
             "center_input_sample": False,
-            "class_embed_type": None,
-            "cross_attention_dim": 1024,
+            "cross_attention_dim": 768,
             "down_block_types": [
                 "CrossAttnDownBlock2D",
                 "CrossAttnDownBlock2D",
@@ -535,28 +537,21 @@ def main():
                 "DownBlock2D"
             ],
             "downsample_padding": 1,
-            "dual_cross_attention": False,
             "flip_sin_to_cos": True,
             "freq_shift": 0,
             "in_channels": 4,
             "layers_per_block": 2,
             "mid_block_scale_factor": 1,
-            "mid_block_type": "UNetMidBlock2DCrossAttn",
             "norm_eps": 1e-05,
             "norm_num_groups": 32,
-            "num_class_embeds": None,
-            "only_cross_attention": False,
             "out_channels": 4,
-            "resnet_time_scale_shift": "default",
-            "sample_size": 96,
+            "sample_size": 64,
             "up_block_types": [
                 "UpBlock2D",
                 "CrossAttnUpBlock2D",
                 "CrossAttnUpBlock2D",
                 "CrossAttnUpBlock2D"
-            ],
-            "upcast_attention": True,
-            "use_linear_projection": True
+            ]
             }
         )
         tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder='tokenizer', use_auth_token=args.hf_token,cache_dir=args.model_cache_dir)
@@ -693,6 +688,16 @@ def main():
         #last_epoch=(global_step // num_steps_per_epoch) - 1,
     )
 
+    if args.resume:
+        train_rt_param_checkpoint = f'{args.model}/train_rt_param.pth'  # 断点路径
+        if os.path.exists(train_rt_param_checkpoint):
+            train_rt_param = torch.load(train_rt_param_checkpoint)  # 加载断点
+            # optimizer.load_state_dict(train_rt_param['optim_state_dict'])  # 加载优化器参数
+            lr_scheduler.load_state_dict(train_rt_param['lr_scheduler_dict'])
+        else:
+            print('Can not find train param!')
+
+
     def save_checkpoint(global_step):
         if rank == 0:
             if args.use_ema:
@@ -707,20 +712,34 @@ def main():
                 safety_checker=None,#StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
                 feature_extractor=None,#CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
-            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}')
+
+        # optimizer.consolidate_state_dict(0)
+        if rank == 0:
             pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}')
+            checkpoint_dict = {'epoch': epoch, 
+                            #'optim_state_dict': optimizer.state_dict(), 
+                            'lr_scheduler_dict': lr_scheduler.state_dict()}
+            torch.save(checkpoint_dict, f'{args.output_path}/{args.run_name}_{global_step}/train_rt_param.pth')
+
+            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}')
+            
 
             if args.use_ema:
                 ema_unet.restore(unet.parameters())
 
     # train!
     try:
+        global isCancelled
         loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
         for epoch in range(args.epochs):
+            if isCancelled:
+                break
             unet.train()
             # if args.train_text_encoder:
             #     text_encoder.train()
             for _, batch in enumerate(train_dataloader):
+                if isCancelled:
+                    break
                 if args.resume and global_step < target_global_step:
                     if rank == 0:
                         progress_bar.update(1)
@@ -738,7 +757,7 @@ def main():
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.num_train_timesteps, (bsz,), device=latents.device)
+                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
                 timesteps = timesteps.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
@@ -777,7 +796,7 @@ def main():
                             # Unscales the gradients of optimizer's assigned params in-place
                             scaler.unscale_(optimizer)
                             # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
-                            torch.nn.utils.clip_grad_norm_(unet.parameters(), 1e6)
+                            torch.nn.utils.clip_grad_norm_(unet.parameters(), 1e10)
 
                         # optimizer's gradients are already unscaled, so scaler.step does not unscale them,
                         # although it still skips optimizer.step() if the gradients contain infs or NaNs.
@@ -828,9 +847,9 @@ def main():
                 torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 loss = loss / world_size
 
+                global_step += 1
                 if rank == 0:
                     progress_bar.update(1)
-                    global_step += 1
                     logs = {
                         "train/loss": loss.detach().item(),
                         "train/lr": lr_scheduler.get_last_lr()[0],
@@ -845,6 +864,12 @@ def main():
 
                 if global_step % args.save_steps == 0 and global_step > 0:
                     save_checkpoint(global_step)
+                
+
+                if isCancelled:
+                    # Save the in final of loop
+                    print('Cancelled by user, save ckpt')
+                    
                 if args.enableinference:
                     if global_step % args.image_log_steps == 0 and global_step > 0:
                         if rank == 0:
@@ -858,50 +883,63 @@ def main():
                                 print('using PNDMScheduler scheduler')
                                 scheduler=PNDMScheduler.from_pretrained(args.model, subfolder="scheduler", use_auth_token=args.hf_token)
 
-                            pipeline = StableDiffusionPipeline(
-                                text_encoder=text_encoder if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
+                            # pipeline = StableDiffusionPipeline(
+                            #     text_encoder=text_encoder if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
+                            #     vae=vae,
+                            #     unet=unet.module,
+                            #     tokenizer=tokenizer,
+                            #     scheduler=scheduler,
+                            #     safety_checker=None, # disable safety checker to save memory
+                            #     feature_extractor=None,#CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
+                            # )
+                            pipeline = StableDiffusionPipeline.from_pretrained(
+                                'runwayml/stable-diffusion-v1-5',
                                 vae=vae,
-                                unet=unet.module,
+                                text_encoder=text_encoder,
                                 tokenizer=tokenizer,
-                                scheduler=scheduler,
-                                safety_checker=None, # disable safety checker to save memory
-                                feature_extractor=None,#CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
-                            ).to(device)
+                                unet=unet.module,
+                                safety_checker=None,
+                                torch_dtype=torch.float16,
+                                cache_dir=args.model_cache_dir
+                            )
+                            #pipeline = pipeline.to(accelerator.device)                          
+                            pipeline.enable_xformers_memory_efficient_attention()
+                            pipeline.enable_sequential_cpu_offload()
                             # inference
-                            if args.enablewandb:
-                                images = []
-                            else:
-                                saveInferencePath = args.output_path + "/inference"
-                                os.makedirs(saveInferencePath, exist_ok=True)
+                            # if args.enablewandb:
+                            #     images = []
+                            # else:
+                            saveInferencePath = args.output_path + "/inference"
+                            os.makedirs(saveInferencePath, exist_ok=True)
                             with torch.no_grad():
-                                with torch.autocast('cuda', enabled=args.fp16):
+                                with torch.autocast('cuda'):
                                     for _ in range(args.image_log_amount):
-                                        if args.enablewandb:
-                                            images.append(
-                                                wandb.Image(pipeline(
-                                                    prompt, num_inference_steps=args.image_log_inference_steps
-                                                ).images[0],
-                                                caption=prompt)
-                                            )
-                                        else:
-                                            from datetime import datetime
-                                            images = pipeline(prompt, num_inference_steps=args.image_log_inference_steps,width=768,height=1024).images[0]
-                                            filenameImg = str(time.time_ns()) + ".jpg"
-                                            filenameTxt = str(time.time_ns()) + ".txt"
-                                            images.save(saveInferencePath + "/" + filenameImg)
-                                            with open(saveInferencePath + "/" + filenameTxt, 'a') as f:
-                                                f.write('Used prompt: ' + prompt + '\n')
-                                                f.write('Generated Image Filename: ' + filenameImg + '\n')
-                                                f.write('Generated at: ' + str(global_step) + ' steps' + '\n')
-                                                f.write('Generated at: ' + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))+ '\n')
+                                        # if args.enablewandb:
+                                        #     images.append(
+                                        #         wandb.Image(pipeline(
+                                        #             prompt, num_inference_steps=args.image_log_inference_steps
+                                        #         ).images[0],
+                                        #         caption=prompt)
+                                        #     )
+                                        # else:
+                                        from datetime import datetime
+                                        images = pipeline(prompt, num_inference_steps=args.image_log_inference_steps,width=768,height=1024).images[0]
+                                        filenameImg = str(time.time_ns()) + ".jpg"
+                                        filenameTxt = str(time.time_ns()) + ".txt"
+                                        images.save(saveInferencePath + "/" + filenameImg)
+                                        with open(saveInferencePath + "/" + filenameTxt, 'a') as f:
+                                            f.write('Used prompt: ' + prompt + '\n')
+                                            f.write('Generated Image Filename: ' + filenameImg + '\n')
+                                            f.write('Generated at: ' + str(global_step) + ' steps' + '\n')
+                                            f.write('Generated at: ' + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))+ '\n')
 
                             # log images under single caption
-                            if args.enablewandb:
-                                run.log({'images': images}, step=global_step)
+                            # if args.enablewandb:
+                            #     run.log({'images': images}, step=global_step)
 
                             # cleanup so we don't run out of memory
                             del pipeline
-                            gc.collect()
+                            torch.cuda.empty_cache()
     except Exception as e:
         print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
         pass
