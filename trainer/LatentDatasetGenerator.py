@@ -165,7 +165,7 @@ class Resize():
             (w, h),
             bleed=0.0,
             centering=(0.5, 0.5),
-            method=Image.Resampling.LANCZOS
+            method=Image.Resampling.BICUBIC
         ).convert(mode='RGB')
 
     def __migration(self, image_path: str, w: int, h: int) -> Img:
@@ -176,7 +176,7 @@ class Resize():
             (w, h),
             bleed=0.0,
             centering=(0.5, 0.5),
-            method=Image.Resampling.LANCZOS
+            method=Image.Resampling.BICUBIC
         ).convert(mode='RGB')
 
         image.save(
@@ -193,7 +193,11 @@ class Resize():
 class ImageStore:
     def __init__(self, data_dir: str) -> None:
         self.data_dir = data_dir
-        imageInfoJsonPath = os.path.join(self.data_dir, 'ImageInfo.json')
+        if os.path.isdir(self.data_dir):
+            imageInfoJsonPath = os.path.join(self.data_dir, 'ImageInfo.json')
+        elif os.path.isfile(self.data_dir):
+            imageInfoJsonPath = self.data_dir
+            self.data_dir = os.path.dirname(imageInfoJsonPath)
         with open(imageInfoJsonPath, "r") as f:
             self.imageInfoList = json.load(f)
             # random.seed(a=42, version=2)
@@ -243,7 +247,7 @@ class ImageStore:
                 qualityDescList.append('masterpiece')
             elif A<3:
                 qualityDescList.append('bad art')
-                isNegativeSample = True
+                # isNegativeSample = True
 
         if 'CAP' in self.imageInfoList[ref[0]].keys():
             captions = self.imageInfoList[ref[0]]['CAP']
@@ -682,6 +686,14 @@ if __name__ == "__main__":
     world_size = get_world_size()
     torch.cuda.set_device(rank)
     # load dataset
+    if args.model[0] == '.':
+        args.model = os.path.join(
+        args.model_cache_dir, args.model[1:])
+
+    if rank==0:
+        if not os.path.exists(args.output_dir):
+            os.mkdir(args.output_dir)    
+
     store = ImageStore(args.dataset)
     dataset = LatentDatasetGenerator(store)
     bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min,
@@ -696,8 +708,6 @@ if __name__ == "__main__":
         print('Num of drop samples: %d' % bucket.total_dropped)
 
     if rank==0:
-        if not os.path.exists(args.output_dir):
-            os.mkdir(args.output_dir)    
         for bucketItem in bucket.buckets:
             sub_dir = '%dx%d'%(bucketItem[0],bucketItem[1])
             full_dir = os.path.join(args.output_dir,sub_dir)

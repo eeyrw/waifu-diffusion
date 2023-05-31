@@ -100,7 +100,16 @@ parser.add_argument('--model_cache_dir', type=str, default=None, required=True,
 parser.add_argument('--debug', dest='debug', type=bool_t, default='False', help='Enable WeightsAndBiases Reporting')
 parser.add_argument('--train_from_scratch', dest='train_from_scratch', type=bool_t, default='False', help='Whether train from scratch')
 parser.add_argument('--use_grad_clip', dest='use_grad_clip', type=bool_t, default='False', help='Whether train from scratch')
-
+parser.add_argument(
+        "--snr_gamma",
+        type=float,
+        default=None,
+        help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
+        "More details here: https://arxiv.org/abs/2303.09556.",
+    )
+parser.add_argument(
+    "--input_pertubation", type=float, default=None, help="The scale of input pretubation. Recommended 0.1."
+)
 
 args = parser.parse_args()
 
@@ -306,7 +315,7 @@ class LatentDataset(torch.utils.data.Dataset):
     def __getitem__(self, item: Tuple[int, int, int]):
         return_dict = {}
         latentDict = self.store.get_latent(item)
-        if random.random() > self.ucg or latentDict['isNegativeSample']:
+        if random.random() > self.ucg or ('isNegativeSample' in latentDict.keys() and latentDict['isNegativeSample']):
             return_dict['txtEmb'] = latentDict['txtEmb']
         else:
             return_dict['txtEmb'] = self.store.getUnconditionalTxtEmb()
@@ -655,8 +664,9 @@ def main():
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_sampler=sampler,
-        num_workers=0,
-        collate_fn=dataset.collate_fn
+        num_workers=2,
+        collate_fn=dataset.collate_fn,
+        pin_memory=True
     )
     
     # Migrate dataset
@@ -697,6 +707,29 @@ def main():
         else:
             print('Can not find train param!')
 
+    def compute_snr(timesteps):
+        """
+        Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
+        """
+        alphas_cumprod = noise_scheduler.alphas_cumprod
+        sqrt_alphas_cumprod = alphas_cumprod**0.5
+        sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
+
+        # Expand the tensors.
+        # Adapted from https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L1026
+        sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
+        while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
+            sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
+        alpha = sqrt_alphas_cumprod.expand(timesteps.shape)
+
+        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
+        while len(sqrt_one_minus_alphas_cumprod.shape) < len(timesteps.shape):
+            sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
+        sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
+
+        # Compute SNR.
+        snr = (alpha / sigma) ** 2
+        return snr
 
     def save_checkpoint(global_step):
         if rank == 0:
@@ -731,6 +764,7 @@ def main():
     try:
         global isCancelled
         loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
+        lowestLoss = torch.tensor(10000.0, device=device, dtype=weight_dtype)
         for epoch in range(args.epochs):
             if isCancelled:
                 break
@@ -755,6 +789,10 @@ def main():
 
                 # Sample noise
                 noise = torch.randn_like(latents)
+
+                if args.input_pertubation:
+                    new_noise = noise + args.input_pertubation * torch.randn_like(noise)
+
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
@@ -762,7 +800,10 @@ def main():
 
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                if args.input_pertubation:
+                    noisy_latents = noise_scheduler.add_noise(latents, new_noise, timesteps)
+                else:
+                    noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the embedding for conditioning
                 encoder_hidden_states = batch['txtEmbs'].to(device, dtype=weight_dtype)
@@ -779,8 +820,27 @@ def main():
                         # Predict the noise residual and compute loss
                         with torch.autocast('cuda', enabled=args.fp16):
                             noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
-                            
-                        loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
+
+                        if args.snr_gamma is None:
+                            loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
+                        else:
+                            # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
+                            # Since we predict the noise instead of x_0, the original formulation is slightly changed.
+                            # This is discussed in Section 4.2 of the same paper.
+                            snr = compute_snr(timesteps)
+                            mse_loss_weights = (
+                                torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                            )
+                            # We first calculate the original loss. Then we mean over the non-batch dimensions and
+                            # rebalance the sample-wise losses with their respective loss weights.
+                            # Finally, we take the mean of the rebalanced loss.
+                            loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="none")
+                            loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
+                            loss = loss.mean()
+
+
+
+                        
 
                         # backprop and update
                         # scaler.scale(loss).backward()
@@ -849,9 +909,12 @@ def main():
 
                 global_step += 1
                 if rank == 0:
+                    if loss<lowestLoss:
+                        lowestLoss = loss
                     progress_bar.update(1)
                     logs = {
                         "train/loss": loss.detach().item(),
+                        "train/lowestLoss": lowestLoss.detach().item(),
                         "train/lr": lr_scheduler.get_last_lr()[0],
                         "train/epoch": epoch,
                         "train/step": global_step,
