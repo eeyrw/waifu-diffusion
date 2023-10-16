@@ -9,11 +9,9 @@ import argparse
 import signal
 import socket
 import torch
-import torchvision
 import transformers
 import diffusers
 import os
-import glob
 import random
 import tqdm
 import resource
@@ -22,12 +20,10 @@ import pynvml
 import wandb
 import gc
 import time
-import itertools
 import numpy as np
 import json
-import re
-import traceback
 import shutil
+import traceback
 from safetensors.torch import load_file
 
 try:
@@ -110,6 +106,11 @@ parser.add_argument(
 parser.add_argument(
     "--input_pertubation", type=float, default=None, help="The scale of input pretubation. Recommended 0.1."
 )
+parser.add_argument('--save_unet_only', type=bool_t, default='True', help='Save unet only')
+parser.add_argument('--save_safetensors', type=bool_t, default='False', help='Save safetensors')
+parser.add_argument('--train_timestep_max', type=int, default=1000, help='train timestep max')
+parser.add_argument('--train_timestep_min', type=int, default=0, help='train timestep min')
+parser.add_argument('--max_iter', type=int, default=None, help='max iteration')
 
 args = parser.parse_args()
 
@@ -655,7 +656,8 @@ def main():
     bucket = LatentBucket(store, args.batch_size)
     sampler = LatentBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
 
-    print(f'STORE_LEN: {len(store)}')
+    if rank == 0:
+        print(f'STORE_LEN: {len(store)}')
 
     if args.output_bucket_info:
         print(bucket.get_bucket_info())
@@ -680,7 +682,7 @@ def main():
     if args.use_ema:
         ema_unet = EMAModel(unet.parameters())
 
-    print(get_gpu_ram())
+    print(f'Rank {rank}:{get_gpu_ram()}')
 
     num_steps_per_epoch = len(train_dataloader)
     progress_bar = tqdm.tqdm(range(args.epochs * num_steps_per_epoch), desc="Total Steps", leave=False)
@@ -736,25 +738,53 @@ def main():
             if args.use_ema:
                 ema_unet.store(unet.parameters())
                 ema_unet.copy_to(unet.parameters())
-            pipeline = StableDiffusionPipeline(
-                text_encoder=text_encoder if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
-                vae=vae,
-                unet=unet.module,
-                tokenizer=tokenizer,
-                scheduler=PNDMScheduler.from_pretrained(args.model, subfolder="scheduler", use_auth_token=args.hf_token),
-                safety_checker=None,#StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
-                feature_extractor=None,#CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
-            )
+            if args.save_unet_only:
+                frozenWeightDir = f'{args.output_path}/{args.run_name}_FROZEN'
+                if not os.path.exists(frozenWeightDir):
+                    pipeline = StableDiffusionPipeline(
+                        text_encoder=text_encoder if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
+                        vae=vae,
+                        unet=unet.module,
+                        tokenizer=tokenizer,
+                        scheduler=PNDMScheduler.from_pretrained(args.model, subfolder="scheduler", use_auth_token=args.hf_token),
+                        safety_checker=None,#StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
+                        feature_extractor=None,#CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
+                    )
+                    pipeline.save_pretrained(frozenWeightDir,safe_serialization=args.save_safetensors)
+                    shutil.rmtree(os.path.join(frozenWeightDir,'unet'))
+            else:
+                pipeline = StableDiffusionPipeline(
+                    text_encoder=text_encoder if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
+                    vae=vae,
+                    unet=unet.module,
+                    tokenizer=tokenizer,
+                    scheduler=PNDMScheduler.from_pretrained(args.model, subfolder="scheduler", use_auth_token=args.hf_token),
+                    safety_checker=None,#StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
+                    feature_extractor=None,#CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
+                )
 
+        # print('Rank %d: Consolidating state dict...'%rank)
         # optimizer.consolidate_state_dict(0)
         if rank == 0:
-            pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}')
+            print('Saving checkpoint...')
+            if args.save_unet_only:
+                frozenWeightDir = f'{args.output_path}/{args.run_name}_FROZEN'
+                unetOnlyWeightDir = f'{args.output_path}/{args.run_name}_{global_step}'
+                unet.module.save_pretrained(f'{unetOnlyWeightDir}/unet',safe_serialization=args.save_safetensors)
+                for frozenWeightPath in ['scheduler','text_encoder','tokenizer','vae','model_index.json']:
+                    os.symlink(
+                        os.path.abspath(os.path.join(frozenWeightDir,frozenWeightPath)),
+                        os.path.abspath(os.path.join(unetOnlyWeightDir,frozenWeightPath))
+                        )
+            else:
+                pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}',safe_serialization=args.save_safetensors)
+
             checkpoint_dict = {'epoch': epoch, 
                             #'optim_state_dict': optimizer.state_dict(), 
                             'lr_scheduler_dict': lr_scheduler.state_dict()}
             torch.save(checkpoint_dict, f'{args.output_path}/{args.run_name}_{global_step}/train_rt_param.pth')
 
-            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}')
+            print(f'Checkpoint saved to: {args.output_path}/{args.run_name}_{global_step}')
             
 
             if args.use_ema:
@@ -763,10 +793,11 @@ def main():
     # train!
     try:
         global isCancelled
+        maxIterationBreak = False
         loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
         lowestLoss = torch.tensor(10000.0, device=device, dtype=weight_dtype)
         for epoch in range(args.epochs):
-            if isCancelled:
+            if isCancelled or maxIterationBreak:
                 break
             unet.train()
             # if args.train_text_encoder:
@@ -779,6 +810,11 @@ def main():
                         progress_bar.update(1)
                     global_step += 1
                     continue
+
+                if args.max_iter and global_step>=args.max_iter:
+                    print('Rank %d:Reach max iteration %d,stop training.'%(rank,args.max_iter))
+                    maxIterationBreak = True
+                    break
                 
                 b_start = time.perf_counter()
                 #latents = vae.encode(batch['pixel_values'].to(device, dtype=weight_dtype)).latent_dist.sample()
@@ -795,7 +831,9 @@ def main():
 
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+                ts_min = max(args.train_timestep_min,0)
+                ts_max = min(args.train_timestep_max,noise_scheduler.config.num_train_timesteps)
+                timesteps = torch.randint(ts_min, ts_max, (bsz,), device=latents.device)
                 timesteps = timesteps.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
