@@ -366,7 +366,8 @@ def parse_args():
                         help='Use penultimate CLIP layer for text embedding')
     parser.add_argument('--extended_mode_chunks', type=int, default=0,
                         help='Enables extended mode for tokenization with given amount of maximum chunks. Values < 2 disable.')
-
+    parser.add_argument('--local_files_only', type=bool_t, default='False',
+                        help='Do not connect to HF')
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
@@ -427,16 +428,16 @@ def main():
                 repo_id=args.hub_model_id or Path(args.output_dir).name, exist_ok=True, token=args.hub_token
             ).repo_id
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="scheduler")
+    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="scheduler",local_files_only=args.local_files_only)
     tokenizer = CLIPTokenizer.from_pretrained(
-        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="tokenizer", revision=args.revision
+        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="tokenizer", revision=args.revision,local_files_only=args.local_files_only
     )
     text_encoder = CLIPTextModel.from_pretrained(
-        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="text_encoder", revision=args.revision
+        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="text_encoder", revision=args.revision,local_files_only=args.local_files_only
     )
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="vae", revision=args.revision)
+    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="vae", revision=args.revision,local_files_only=args.local_files_only)
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="unet", revision=args.revision
+        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="unet", revision=args.revision,local_files_only=args.local_files_only
     )
     # freeze parameters of models to save more memory
     unet.requires_grad_(False)
@@ -563,10 +564,15 @@ def main():
 
     
 
-
+    def get_world_size() -> int:
+        if not torch.distributed.is_initialized():
+            return 1
+        return torch.distributed.get_world_size()
 
     from AspectRatioBucketDataset import ARBDataloader
-    arbDataloader = ARBDataloader(args,tokenizer,text_encoder,accelerator.device,8,args.local_rank)
+    ws = get_world_size()
+    rk = args.local_rank
+    arbDataloader = ARBDataloader(args,tokenizer,text_encoder,accelerator.device,ws,rk)
     train_dataloader = arbDataloader.train_dataloader
 
 
@@ -778,6 +784,7 @@ def main():
                     unet=accelerator.unwrap_model(unet),
                     revision=args.revision,
                     torch_dtype=weight_dtype,
+                    local_files_only=args.local_files_only
                 )
                 pipeline = pipeline.to(accelerator.device)
                 pipeline.set_progress_bar_config(disable=True)
@@ -833,7 +840,7 @@ def main():
     # Final inference
     # Load previous pipeline
     pipeline = DiffusionPipeline.from_pretrained(
-        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, revision=args.revision, torch_dtype=weight_dtype
+        args.pretrained_model_name_or_path,cache_dir=args.cache_dir, revision=args.revision, torch_dtype=weight_dtype,local_files_only=args.local_files_only
     )
     pipeline = pipeline.to(accelerator.device)
 
