@@ -1,0 +1,17 @@
+Disabling:
+The following disables a GPU, making it invisible, so that it's not on the list of CUDA devices you can find (and it doesn't even take up a device index)
+
+nvidia-smi -i 0000:xx:00.0 -pm 0
+nvidia-smi drain -p 0000:xx:00.0 -m 1
+where xx is the PCI device ID of your GPU. You can determine that using lspci | grep NVIDIA or nvidia-smi.
+
+The device will still be visible with lspci after running the commands above.
+
+Re-enabling:
+nvidia-smi drain -p 0000:xx:00.0 -m 0
+the device should now be visible
+
+Problems with this approach
+This may fail to work if you are not root; or in some scenarios I can't yet characterize.
+Haven't yet checked what happens to procesess which are actively using the GPU as you do this.
+The syntax is baroque and confusing. NVIDIA - for shame, you need to make it simpler to disable GPUs.

@@ -125,23 +125,10 @@ class ImageStore:
         elif os.path.isfile(self.data_dir):
             imageInfoJsonPath = self.data_dir
             self.data_dir = os.path.dirname(imageInfoJsonPath)
-
-        _, file_extension = os.path.splitext(imageInfoJsonPath)
-        if file_extension == '.json':
-            with open(imageInfoJsonPath, "r") as f:
-                self.imageInfoList = json.load(f)
-        elif file_extension == '.jsonl':
-            raise NotImplementedError('Not implement jsonl')     
-        # random.seed(a=42, version=2)
-        # random.shuffle(self.imageInfoList)
-        # imageInfoListFiltered = []
-        # for imageInfo in self.imageInfoList:
-        #     if imageInfo['W']*imageInfo['H']>=args.resolution*args.resolution: #and imageInfo['A']>5.5:
-        #         # imageInfo['HAS_WATERMARK']<0.7 and \
-        #         #     (imageInfo['A']+imageInfo['A_EAT'])/2>5.5:
-        #         imageInfoListFiltered.append(imageInfo)
-        # self.imageInfoList = imageInfoListFiltered
-
+        with open(imageInfoJsonPath, "r") as f:
+            self.imageInfoList = json.load(f)
+            # random.seed(a=42, version=2)
+            # random.shuffle(self.imageInfoList)
         self.image_files = [os.path.join(
             self.data_dir, imageInfo['IMG']) for imageInfo in self.imageInfoList]
         self.validator = Validation(
@@ -173,21 +160,21 @@ class ImageStore:
     def get_caption(self, ref: Tuple[int, int, int]) -> str:
         qualityDescList = []
         isNegativeSample = False
-        if 'Q512' in self.imageInfoList[ref[0]].keys():
-            Q = self.imageInfoList[ref[0]]['Q512']
-            if Q>65:
-                qualityDescList.append('high res,best quality')
-            elif Q<40:
-                qualityDescList.append('low res,low quality')
-                isNegativeSample = True
+        # if 'Q512' in self.imageInfoList[ref[0]].keys():
+        #     Q = self.imageInfoList[ref[0]]['Q512']
+        #     if Q>65:
+        #         qualityDescList.append('high res,best quality')
+        #     elif Q<50:
+        #         qualityDescList.append('low res,low quality')
+        #         isNegativeSample = True
 
-        if 'A' in self.imageInfoList[ref[0]].keys():
-            A = self.imageInfoList[ref[0]]['A']
-            if A>5.5:
-                qualityDescList.append('masterpiece')
-            elif A<3:
-                qualityDescList.append('bad art')
-                # isNegativeSample = True
+        # if 'A' in self.imageInfoList[ref[0]].keys():
+        #     A = self.imageInfoList[ref[0]]['A']
+        #     if A>5.5:
+        #         qualityDescList.append('masterpiece')
+        #     elif A<3:
+        #         qualityDescList.append('bad art')
+        #         # isNegativeSample = True
 
         if 'CAP' in self.imageInfoList[ref[0]].keys():
             captions = self.imageInfoList[ref[0]]['CAP']
@@ -201,17 +188,12 @@ class ImageStore:
                 caption = random.choice(captions)
             elif isinstance(captions, str):
                 caption = captions
-            # if 'artist' in self.imageInfoList[ref[0]].keys():
-            #     caption = 'by artist '+ self.imageInfoList[ref[0]]['artist'] + caption
+            if 'artist' in self.imageInfoList[ref[0]].keys():
+                caption = 'by artist '+ self.imageInfoList[ref[0]]['artist'] + caption
             # if 'style' in self.imageInfoList[ref[0]].keys():
             #     caption = 'in style of '+ self.imageInfoList[ref[0]]['style'] + caption
             
-        # if random.random() > 0.7:    
-        #     caption = caption+','+','.join(qualityDescList)
             
-            
-        #caption = ','.join(qualityDescList)+',' + caption
-
         #caption = ','.join(qualityDescList)+',' + caption
         return caption
 
@@ -228,7 +210,6 @@ class AspectBucket:
                  bucket_side_min: int = 256,
                  bucket_side_max: int = 768,
                  bucket_side_increment: int = 64,
-                 bucket_mode: str = 'multiscale',
                  max_image_area: int = 512 * 768,
                  max_ratio: float = 2):
 
@@ -236,7 +217,6 @@ class AspectBucket:
         self.bucket_length_min = bucket_side_min
         self.bucket_length_max = bucket_side_max
         self.bucket_increment = bucket_side_increment
-        self.bucket_mode = bucket_mode
         self.max_image_area = max_image_area
         self.batch_size = batch_size
         self.total_dropped = 0
@@ -254,35 +234,11 @@ class AspectBucket:
         self.init_buckets()
         self.fill_buckets()
 
-    def get_buckets(self,mode):
-        if mode == 'maxfit':
-            # https://blog.novelai.net/novelai-improvements-on-stable-diffusion-e10d38db82ac
-            # ● Set the width to 256.
-            # ● While the width is less than or equal to 1024:
-            # • Find the largest height such that height is less than or equal to 1024 and that width multiplied by height is less than or equal to 512 * 768.
-            # • Add the resolution given by height and width as a bucket.
-            # • Increase the width by 64.
-
-            maxPixelNum =self.max_image_area
-            width = self.bucket_length_min
-            bucketSet=set()
-            #bucketSet.add((min(h,w),min(h,w))) # Add default size
-            while width<=self.bucket_length_max:
-                height = min(maxPixelNum//width//64*64,self.bucket_length_max)
-                #if  max(width,height) / min(width,height) <= self.max_ratio:
-                bucketSet.add((width,height))
-                bucketSet.add((height,width))
-                width = width+64
-            possible_buckets = list(bucketSet)
-        elif mode == 'multiscale':
-            possible_lengths = list(
-                range(self.bucket_length_min, self.bucket_length_max + 1, self.bucket_increment))
-            possible_buckets = list((w, h) for w, h in itertools.product(possible_lengths, possible_lengths)
-                                    if w >= h and w * h <= self.max_image_area and w / h <= self.max_ratio)
-        return possible_buckets
-    
     def init_buckets(self):
-        possible_buckets = self.get_buckets(self.bucket_mode)
+        possible_lengths = list(
+            range(self.bucket_length_min, self.bucket_length_max + 1, self.bucket_increment))
+        possible_buckets = list((w, h) for w, h in itertools.product(possible_lengths, possible_lengths)
+                                if w >= h and w * h <= self.max_image_area and w / h <= self.max_ratio)
 
         buckets_by_ratio = {}
 
@@ -431,14 +387,9 @@ class AspectBucket:
 
 from torch.utils.data.sampler import Sampler,BatchSampler
 
-class AspectBucketSampler(BatchSampler):
-    def __init__(self, 
-                 bucket: AspectBucket,
-                 num_replicas: int = 1, 
-                 rank: int = 0,
-                batch_size: int = 1,
-                 drop_last: bool = False):
-        #super().__init__(None)
+class AspectBucketSampler(Sampler):
+    def __init__(self, bucket: AspectBucket, num_replicas: int = 1, rank: int = 0):
+        super().__init__(None)
         self.bucket = bucket
         self.num_replicas = num_replicas
         self.rank = rank
@@ -452,21 +403,51 @@ class AspectBucketSampler(BatchSampler):
     def __len__(self):
         return self.bucket.get_batch_count() // self.num_replicas
 
+    # # Preprocessing the datasets.
+    # train_resize = transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR)
+    # train_crop = transforms.CenterCrop(args.resolution) if args.center_crop else transforms.RandomCrop(args.resolution)
+    # train_flip = transforms.RandomHorizontalFlip(p=1.0)
+    # train_transforms = transforms.Compose([transforms.ToTensor(), transforms.Normalize([0.5], [0.5])])
+
+    # def preprocess_train(examples):
+    #     images = [image.convert("RGB") for image in examples[image_column]]
+    #     # image aug
+    #     original_sizes = []
+    #     all_images = []
+    #     crop_top_lefts = []
+    #     for image in images:
+    #         original_sizes.append((image.width, image.height))
+    #         image = train_resize(image)
+    #         if args.center_crop:
+    #             y1 = max(0, int(round((image.height - args.resolution) / 2.0)))
+    #             x1 = max(0, int(round((image.width - args.resolution) / 2.0)))
+    #             image = train_crop(image)
+    #         else:
+    #             y1, x1, h, w = train_crop.get_params(image, (args.resolution, args.resolution))
+    #             image = crop(image, y1, x1, h, w)
+    #         if args.random_flip and random.random() < 0.5:
+    #             # flip
+    #             x1 = image.width - x1
+    #             image = train_flip(image)
+    #         crop_top_left = (y1, x1)
+    #         crop_top_lefts.append(crop_top_left)
+    #         image = train_transforms(image)
+    #         all_images.append(image)
+
+    #     examples["original_sizes"] = original_sizes
+    #     examples["crop_top_lefts"] = crop_top_lefts
+    #     examples["pixel_values"] = all_images
+    #     return examples
 
 class AspectDataset(torch.utils.data.Dataset):
-    def __init__(self, args, store: ImageStore, tokenizer: CLIPTokenizer, text_encoder: CLIPTextModel, device: torch.device, ucg: float = 0.1):
+    def __init__(self, args, store: ImageStore,  device: torch.device, ucg: float = 0.1):
         self.store = store
-        self.tokenizer = tokenizer
-        self.text_encoder = text_encoder
         self.device = device
         self.ucg = ucg
         self.args = args
 
-        if type(self.text_encoder) is torch.nn.parallel.DistributedDataParallel:
-            self.text_encoder = self.text_encoder.module
-
         self.transforms = torchvision.transforms.Compose([
-            #torchvision.transforms.RandomHorizontalFlip(p=0.5),
+            torchvision.transforms.RandomHorizontalFlip(p=0.5),
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Normalize([0.5], [0.5])
         ])
@@ -485,97 +466,29 @@ class AspectDataset(torch.utils.data.Dataset):
         else:
             caption_file = ''
 
-        return_dict['input_text'] = caption_file
+        return_dict['input_texts'] = caption_file
         return return_dict
 
     def collate_fn(self, examples):
         pixel_values = torch.stack([example['pixel_values']
                                    for example in examples if example is not None])
         pixel_values.to(memory_format=torch.contiguous_format).float()
-        input_texts = [example['input_text']
+        input_texts = [example['input_texts']
                                    for example in examples if example is not None]
-        # if self.args.extended_mode_chunks < 2:
-        #     max_length = self.tokenizer.model_max_length - 2
-        #     input_ids = [self.tokenizer([example['input_ids']], truncation=True, return_length=True, return_overflowing_tokens=False,
-        #                                 padding=False, add_special_tokens=False, max_length=max_length).input_ids for example in examples if example is not None]
-        # else:
-        #     max_length = self.tokenizer.model_max_length
-        #     max_chunks = self.args.extended_mode_chunks
-        #     input_ids = [self.tokenizer([example['input_ids']], truncation=True, return_length=True, return_overflowing_tokens=False, padding=False, add_special_tokens=False, max_length=(
-        #         max_length * max_chunks) - (max_chunks * 2)).input_ids[0] for example in examples if example is not None]
-
-        # tokens = input_ids
-
-        # if self.args.extended_mode_chunks < 2:
-        #     for i, x in enumerate(input_ids):
-        #         for j, y in enumerate(x):
-        #             input_ids[i][j] = [self.tokenizer.bos_token_id, *y, *np.full(
-        #                 (self.tokenizer.model_max_length - len(y) - 1), self.tokenizer.eos_token_id)]
-
-        #     if self.args.clip_penultimate:
-        #         input_ids = [self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(input_id).to(
-        #             self.device), output_hidden_states=True)['hidden_states'][-2])[0] for input_id in input_ids]
-        #     else:
-        #         input_ids = [self.text_encoder(torch.asarray(input_id).to(
-        #             self.device), output_hidden_states=True).last_hidden_state[0] for input_id in input_ids]
-        # else:
-        #     max_standard_tokens = max_length - 2
-        #     max_chunks = self.args.extended_mode_chunks
-        #     max_len = np.ceil(max(len(x) for x in input_ids) /
-        #                       max_standard_tokens).astype(int).item() * max_standard_tokens
-        #     if max_len > max_standard_tokens:
-        #         z = None
-        #         for i, x in enumerate(input_ids):
-        #             if len(x) < max_len:
-        #                 input_ids[i] = [
-        #                     *x, *np.full((max_len - len(x)), self.tokenizer.eos_token_id)]
-        #         batch_t = torch.tensor(input_ids)
-        #         chunks = [batch_t[:, i:i + max_standard_tokens]
-        #                   for i in range(0, max_len, max_standard_tokens)]
-        #         for chunk in chunks:
-        #             chunk = torch.cat((torch.full((chunk.shape[0], 1), self.tokenizer.bos_token_id), chunk, torch.full(
-        #                 (chunk.shape[0], 1), self.tokenizer.eos_token_id)), 1)
-        #             if z is None:
-        #                 if self.args.clip_penultimate:
-        #                     z = self.text_encoder.text_model.final_layer_norm(self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True)['hidden_states'][-2])
-        #                 else:
-        #                     z = self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True).last_hidden_state
-        #             else:
-        #                 if self.args.clip_penultimate:
-        #                     z = torch.cat((z, self.text_encoder.text_model.final_layer_norm(self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True)['hidden_states'][-2])), dim=-2)
-        #                 else:
-        #                     z = torch.cat((z, self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True).last_hidden_state), dim=-2)
-        #         input_ids = z
-        #     else:
-        #         for i, x in enumerate(input_ids):
-        #             input_ids[i] = [self.tokenizer.bos_token_id, *x, *np.full(
-        #                 (self.tokenizer.model_max_length - len(x) - 1), self.tokenizer.eos_token_id)]
-        #         if self.args.clip_penultimate:
-        #             input_ids = self.text_encoder.text_model.final_layer_norm(self.text_encoder(
-        #                 torch.asarray(input_ids).to(self.device), output_hidden_states=True)['hidden_states'][-2])
-        #         else:
-        #             input_ids = self.text_encoder(torch.asarray(input_ids).to(
-        #                 self.device), output_hidden_states=True).last_hidden_state
-        # input_ids = torch.stack(tuple(input_ids))
 
         return {
             'pixel_values': pixel_values,
             'input_texts': input_texts,
-            #'tokens': tokens
         }
 
 
 class ARBDataloader:
-    def __init__(self, args, tokenizer, text_encoder, device, world_size, rank) -> None:
+    def __init__(self, args, device, world_size, rank) -> None:
         self.store = ImageStore(args,args.train_data_dir)
         self.dataset = AspectDataset(
-            args, self.store, tokenizer, text_encoder, device, ucg=args.ucg)
+            args, self.store, device, ucg=args.ucg)
         self.bucket = AspectBucket(self.store, args.num_buckets, args.train_batch_size, args.bucket_side_min,
-                              args.bucket_side_max, 64, args.bucket_mode,args.resolution * args.resolution, 2.0)
+                              args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
         self.sampler =  AspectBucketSampler(
             bucket=self.bucket, num_replicas=world_size, rank=rank)
         print(f'STORE_LEN: {len(self.store)}')
@@ -584,7 +497,7 @@ class ARBDataloader:
         self.train_dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_sampler=self.sampler,
-            num_workers=0,
+            num_workers=4,
             collate_fn=self.dataset.collate_fn
         )
 
