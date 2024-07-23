@@ -513,6 +513,13 @@ def parse_args():
         help="Path to pretrained ema model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
+        "--pretrained_vae",
+        type=str,
+        default=None,
+        required=True,
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
         "--revision",
         type=str,
         default=None,
@@ -914,9 +921,15 @@ def main():
         text_encoder = CLIPTextModel.from_pretrained(
             args.pretrained_model_name_or_path,cache_dir=args.model_cache_dir,local_files_only=args.local_files_only, subfolder="text_encoder", revision=args.revision
         )
-        vae = AutoencoderKL.from_pretrained(
-            args.pretrained_model_name_or_path,cache_dir=args.model_cache_dir,local_files_only=args.local_files_only, subfolder="vae", revision=args.revision
-        )
+        
+        if args.pretrained_vae:
+            vae = AutoencoderKL.from_pretrained(
+                args.pretrained_vae,cache_dir=args.model_cache_dir,local_files_only=args.local_files_only, revision=args.revision
+            )
+        else:
+            vae = AutoencoderKL.from_pretrained(
+                args.pretrained_model_name_or_path,cache_dir=args.model_cache_dir,local_files_only=args.local_files_only, subfolder="vae", revision=args.revision
+            )
 
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path,cache_dir=args.model_cache_dir,local_files_only=args.local_files_only, subfolder="unet", revision=args.non_ema_revision
@@ -1128,7 +1141,7 @@ def main():
         num_training_steps=args.max_train_steps# * accelerator.num_processes,
     )
 
-    AcceleratorState().deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]=args.train_batch_size
+    accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]=args.train_batch_size
 
     # Prepare everything with our `accelerator`.
     unet, optimizer, lr_scheduler = accelerator.prepare(
@@ -1265,8 +1278,12 @@ def main():
                     noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"].to(accelerator.device))[0]
-
+                if args.clip_penultimate:
+                    encoder_hidden_states = text_encoder.text_model.final_layer_norm(
+                        text_encoder(batch["input_ids"].to(accelerator.device), output_hidden_states=True)['hidden_states'][-2])
+                else:
+                    encoder_hidden_states = text_encoder(batch["input_ids"].to(accelerator.device))[0]
+                        
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
                     # set prediction_type of scheduler if defined
