@@ -658,8 +658,8 @@ def main():
     )
 
     # Prepare everything with our `accelerator`.
-    unet, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(
-        unet, optimizer, lr_scheduler, train_dataloader
+    unet, optimizer, lr_scheduler = accelerator.prepare(
+        unet, optimizer, lr_scheduler
     )
 
 
@@ -736,7 +736,7 @@ def main():
             with accelerator.accumulate(unet):
                 batch = preprocess_train(batch)
                 # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
+                latents = vae.encode(batch["pixel_values"].to(accelerator.device,dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
