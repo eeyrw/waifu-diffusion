@@ -28,6 +28,73 @@ def _sort_by_ratio(bucket: tuple) -> float:
 def _sort_by_area(bucket: tuple) -> float:
     return bucket[0] * bucket[1]
 
+def fitByVisualCenter(image, size, method=Image.Resampling.BICUBIC,visual_center=(0.5, 0.5)):
+    """
+    Returns a resized and cropped version of the image, cropped to the
+    requested aspect ratio and size.
+
+    This function was contributed by Kevin Cazabon.
+
+    :param image: The image to resize and crop.
+    :param size: The requested output size in pixels, given as a
+                 (width, height) tuple.
+    :param method: Resampling method to use. Default is
+                   :py:attr:`~PIL.Image.Resampling.BICUBIC`.
+                   See :ref:`concept-filters`.
+    :param visual_center: current center (wc,hc) of image
+    :return: An image.
+    """
+
+    # ensure centering is mutable
+    visual_center = list(visual_center)
+
+    live_size = (
+        image.size[0],
+        image.size[1],
+    )
+
+    # calculate the aspect ratio of the live_size
+    live_size_ratio = live_size[0] / live_size[1]
+
+    # calculate the aspect ratio of the output image
+    output_ratio = size[0] / size[1]
+
+    # figure out if the sides or top/bottom will be cropped off
+    if live_size_ratio == output_ratio:
+        # live_size is already the needed ratio
+        crop_width = live_size[0]
+        crop_height = live_size[1]
+    elif live_size_ratio >= output_ratio:
+        # live_size is wider than what's needed, crop the sides
+        crop_width = output_ratio * live_size[1]
+        crop_height = live_size[1]
+    else:
+        # live_size is taller than what's needed, crop the top and bottom
+        crop_width = live_size[0]
+        crop_height = live_size[0] / output_ratio
+
+    # make the crop
+    wc,hc = visual_center[0]*live_size[0],visual_center[1]*live_size[1]
+
+    crop_left = wc - crop_width/2
+    crop_right = wc + crop_width/2
+    crop_top = hc - crop_height/2
+    crop_bottom = hc + crop_height/2
+
+    if crop_left<0:
+        crop_left = 0
+    if crop_right>live_size[0]:
+        crop_left = live_size[0]-crop_width
+    if crop_top<0:
+        crop_top = 0
+    if crop_bottom>live_size[1]:
+        crop_top = live_size[1]-crop_height   
+
+
+    crop = (crop_left, crop_top, crop_left + crop_width, crop_top + crop_height)
+
+    # resize the image and return it
+    return image.resize(size, method, box=crop)
 
 class Validation():
     def __init__(self, is_skipped: bool, is_extended: bool) -> None:
@@ -86,23 +153,21 @@ class Resize():
 
         self.resize = self.__no_migration
 
-    def __no_migration(self, image_path: str, w: int, h: int) -> Img:
-        return ImageOps.fit(
+    def __no_migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
+        return fitByVisualCenter(
             Image.open(image_path),
             (w, h),
-            bleed=0.0,
-            centering=(0.5, 0.5),
+            visual_center=visual_center,
             method=Image.Resampling.BICUBIC
         ).convert(mode='RGB')
 
-    def __migration(self, image_path: str, w: int, h: int) -> Img:
+    def __migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
         filename = re.sub('\.[^/.]+$', '', os.path.split(image_path)[1])
 
-        image = ImageOps.fit(
+        image = fitByVisualCenter(
             Image.open(image_path),
             (w, h),
-            bleed=0.0,
-            centering=(0.5, 0.5),
+            visual_center=visual_center,
             method=Image.Resampling.BICUBIC
         ).convert(mode='RGB')
 
@@ -163,16 +228,30 @@ class ImageStore:
 
     # get image by index
     def get_image(self, ref: Tuple[int, int, int]) -> Img:
+        if 'V_CENTER' in self.imageInfoList[ref[0]].keys():
+            visual_center = self.imageInfoList[ref[0]]['V_CENTER']
+        else:
+            visual_center = (0.5,0.5)
         return self.resizer(
             self.image_files[ref[0]],
             ref[1],
-            ref[2]
+            ref[2],
+            visual_center=visual_center
         )
 
     # gets caption by removing the extension from the filename and replacing it with .txt
     def get_caption(self, ref: Tuple[int, int, int]) -> str:
         qualityDescList = []
         isNegativeSample = False
+
+        if 'A_EAT' in self.imageInfoList[ref[0]].keys():
+            A = self.imageInfoList[ref[0]]['A_EAT']
+            if A>5.5:
+                qualityDescList.append('masterpiece')
+            elif A<3:
+                qualityDescList.append('bad art')
+                # isNegativeSample = True
+
         if 'Q512' in self.imageInfoList[ref[0]].keys():
             Q = self.imageInfoList[ref[0]]['Q512']
             if Q>65:
@@ -181,16 +260,12 @@ class ImageStore:
                 qualityDescList.append('low res,low quality')
                 isNegativeSample = True
 
-        if 'A' in self.imageInfoList[ref[0]].keys():
-            A = self.imageInfoList[ref[0]]['A']
-            if A>5.5:
-                qualityDescList.append('masterpiece')
-            elif A<3:
-                qualityDescList.append('bad art')
-                # isNegativeSample = True
-
-        if 'CAP' in self.imageInfoList[ref[0]].keys():
-            captions = self.imageInfoList[ref[0]]['CAP']
+        if random.random() > 0.5:
+            caption_key = 'HQ_CAP'
+        else:
+            caption_key = 'DBRU_TAG'
+        if caption_key in self.imageInfoList[ref[0]].keys():
+            captions = self.imageInfoList[ref[0]][caption_key]
         else:
             captions = None
             #print(self.imageInfoList[ref[0]]['IMG'])
@@ -210,9 +285,7 @@ class ImageStore:
         #     caption = caption+','+','.join(qualityDescList)
             
             
-        #caption = ','.join(qualityDescList)+',' + caption
-
-        #caption = ','.join(qualityDescList)+',' + caption
+        caption = ','.join(qualityDescList)+',' + caption
         return caption
 
 

@@ -154,6 +154,13 @@ def parse_args():
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
+        "--pretrained_vae",
+        type=str,
+        default=None,
+        required=True,
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
         "--revision",
         type=str,
         default=None,
@@ -512,7 +519,15 @@ def main():
     text_encoder = CLIPTextModel.from_pretrained(
         args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="text_encoder", revision=args.revision,local_files_only=args.local_files_only
     )
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="vae", revision=args.revision,local_files_only=args.local_files_only)
+    if args.pretrained_vae:
+        vae = AutoencoderKL.from_pretrained(
+            args.pretrained_vae,cache_dir=args.cache_dir,local_files_only=args.local_files_only, revision=args.revision
+        )
+    else:
+        vae = AutoencoderKL.from_pretrained(
+            args.pretrained_model_name_or_path,cache_dir=args.cache_dir,local_files_only=args.local_files_only, subfolder="vae", revision=args.revision
+        )
+
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path,cache_dir=args.cache_dir, subfolder="unet", revision=args.revision,local_files_only=args.local_files_only
     )
