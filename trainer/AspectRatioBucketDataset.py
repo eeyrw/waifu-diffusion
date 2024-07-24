@@ -260,10 +260,7 @@ class ImageStore:
                 qualityDescList.append('low res,low quality')
                 isNegativeSample = True
 
-        if random.random() > 0.5:
-            caption_key = 'HQ_CAP'
-        else:
-            caption_key = 'DBRU_TAG'
+        caption_key = random.choice(['HQ_CAP','DBRU_TAG','CAP'])
         if caption_key in self.imageInfoList[ref[0]].keys():
             captions = self.imageInfoList[ref[0]][caption_key]
         else:
