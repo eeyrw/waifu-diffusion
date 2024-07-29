@@ -273,6 +273,11 @@ class ImageStore:
                 caption = random.choice(captions)
             elif isinstance(captions, str):
                 caption = captions
+
+            if caption_key == 'DBRU_TAG':
+                tagList = caption.split(',')
+                random.shuffle(tagList)
+                caption = ','.join(tagList)
             # if 'artist' in self.imageInfoList[ref[0]].keys():
             #     caption = 'by artist '+ self.imageInfoList[ref[0]]['artist'] + caption
             # if 'style' in self.imageInfoList[ref[0]].keys():
