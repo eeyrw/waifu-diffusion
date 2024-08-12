@@ -286,7 +286,7 @@ class ImageStore:
         # if random.random() > 0.7:    
         #     caption = caption+','+','.join(qualityDescList)
             
-            
+        random.shuffle(qualityDescList)    
         caption = ','.join(qualityDescList)+',' + caption
         return caption
 

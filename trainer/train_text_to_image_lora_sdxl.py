@@ -51,7 +51,7 @@ from diffusers import (
     UNet2DConditionModel,
 )
 from diffusers.loaders import LoraLoaderMixin
-from diffusers.optimization import get_scheduler
+from diffusers.optimization import get_scheduler,get_polynomial_decay_schedule_with_warmup
 from diffusers.training_utils import _set_state_dict_into_text_encoder, cast_training_params, compute_snr
 from diffusers.utils import (
     check_min_version,
@@ -374,6 +374,12 @@ def parse_args(input_args=None):
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument(
+        "--override_learning_rate",
+        type=float,
+        default=None,
+        help="Override LR when resume",
+    )
+    parser.add_argument(
         "--scale_lr",
         action="store_true",
         default=False,
@@ -385,7 +391,15 @@ def parse_args(input_args=None):
         default="constant",
         help=(
             'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
+            ' "constant", "constant_with_warmup", "multistep_lr"]'
+        ),
+    )
+    parser.add_argument(
+        "--multistep_milestone",
+        type=lambda x:list(map(int, x.split(','))),
+        default=[10,20],
+        help=(
+            'The multistep lr scheduler milestone'
         ),
     )
     parser.add_argument(
@@ -942,12 +956,16 @@ def main(args):
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    lr_scheduler = get_scheduler(
-        args.lr_scheduler,
-        optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
-        num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
-    )
+    if args.lr_scheduler == 'multistep_lr':
+        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer, args.multistep_milestone, gamma=0.1, last_epoch=-1, verbose='deprecated')
+    else:
+        lr_scheduler = get_scheduler(
+            args.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
+            num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+        )
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
         accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]=args.train_batch_size
 
@@ -1010,6 +1028,12 @@ def main(args):
 
             initial_global_step = global_step
             first_epoch = global_step // num_update_steps_per_epoch
+
+            if args.override_learning_rate is not None:
+                lr_scheduler_state = lr_scheduler.state_dict()
+                lr_scheduler_state['base_lrs']=[args.override_learning_rate]
+                lr_scheduler_state['_last_lr']=[args.override_learning_rate]
+                lr_scheduler.load_state_dict(lr_scheduler_state)
 
     else:
         initial_global_step = 0
@@ -1140,7 +1164,7 @@ def main(args):
             if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
-                accelerator.log({"train_loss": train_loss}, step=global_step)
+                accelerator.log({"train_loss": train_loss, "lr": lr_scheduler.get_last_lr()[0]}, step=global_step)
                 train_loss = 0.0
 
                 # DeepSpeed requires saving weights on every device; saving weights only on the main process would cause issues.
