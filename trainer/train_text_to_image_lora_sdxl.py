@@ -528,6 +528,8 @@ def parse_args(input_args=None):
                         help='Enables extended mode for tokenization with given amount of maximum chunks. Values < 2 disable.')
     parser.add_argument('--local_files_only', type=bool_t, default='False',
                         help='Do not connect to HF')
+    parser.add_argument('--weighted_sample', type=bool_t, default='False',
+                        help='Use weighted sample')
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:

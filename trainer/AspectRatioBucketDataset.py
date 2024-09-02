@@ -1,3 +1,4 @@
+import argparse
 import torch
 import torchvision
 import os
@@ -162,7 +163,7 @@ class Resize():
         ).convert(mode='RGB')
 
     def __migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
-        filename = re.sub('\.[^/.]+$', '', os.path.split(image_path)[1])
+        filename = re.sub(r'\.[^/.]+$', '', os.path.split(image_path)[1])
 
         image = fitByVisualCenter(
             Image.open(image_path),
@@ -197,15 +198,6 @@ class ImageStore:
                 self.imageInfoList = json.load(f)
         elif file_extension == '.jsonl':
             raise NotImplementedError('Not implement jsonl')     
-        # random.seed(a=42, version=2)
-        # random.shuffle(self.imageInfoList)
-        # imageInfoListFiltered = []
-        # for imageInfo in self.imageInfoList:
-        #     if imageInfo['W']*imageInfo['H']>=args.resolution*args.resolution: #and imageInfo['A']>5.5:
-        #         # imageInfo['HAS_WATERMARK']<0.7 and \
-        #         #     (imageInfo['A']+imageInfo['A_EAT'])/2>5.5:
-        #         imageInfoListFiltered.append(imageInfo)
-        # self.imageInfoList = imageInfoListFiltered
 
         self.image_files = [os.path.join(
             self.data_dir, imageInfo['IMG']) for imageInfo in self.imageInfoList]
@@ -218,22 +210,38 @@ class ImageStore:
 
         self.image_files = [x for x in self.image_files if self.validator(x)]
 
+        if not args.weighted_sample:
+            self.imagesIdxList = list(range(len(self.imageInfoList)))
+        else:
+            self.imagesWeightList = np.asarray([imageInfo['WEIGHT'] for imageInfo in self.imageInfoList])
+            self.imagesWeightList /= self.imagesWeightList.sum()
+            self.resample_ds_by_weight()
+
     def __len__(self) -> int:
-        return len(self.image_files)
+        return len(self.imagesIdxList)
+    
+    def resample_ds_by_weight(self):
+        print('Resample DS')
+        rawImagesIdxList = list(range(len(self.imageInfoList)))
+        rng = np.random.default_rng()
+        resampleList = rng.choice(rawImagesIdxList,len(self.imageInfoList)*20,replace=True,p=self.imagesWeightList)
+        self.imagesIdxList = resampleList.tolist()
 
     # iterator returns images as PIL images and their index in the store
-    def entries_iterator(self) -> Generator[Tuple[Img, int], None, None]:
+    def entries_iterator(self) -> Generator[Tuple[Dict, int], None, None]:
         for f in range(len(self)):
-            yield Image.open(self.image_files[f]), f
+            remapIdx = self.imagesIdxList[f]
+            yield self.imageInfoList[remapIdx], f
 
     # get image by index
     def get_image(self, ref: Tuple[int, int, int]) -> Img:
-        if 'V_CENTER' in self.imageInfoList[ref[0]].keys():
-            visual_center = self.imageInfoList[ref[0]]['V_CENTER']
+        remapIdx = self.imagesIdxList[ref[0]]
+        if 'V_CENTER' in self.imageInfoList[remapIdx].keys():
+            visual_center = self.imageInfoList[remapIdx]['V_CENTER']
         else:
             visual_center = (0.5,0.5)
         return self.resizer(
-            self.image_files[ref[0]],
+            self.image_files[remapIdx],
             ref[1],
             ref[2],
             visual_center=visual_center
@@ -243,17 +251,18 @@ class ImageStore:
     def get_caption(self, ref: Tuple[int, int, int]) -> str:
         qualityDescList = []
         isNegativeSample = False
+        remapIdx = self.imagesIdxList[ref[0]]
 
-        if 'A_EAT' in self.imageInfoList[ref[0]].keys():
-            A = self.imageInfoList[ref[0]]['A_EAT']
+        if 'A_EAT' in self.imageInfoList[remapIdx].keys():
+            A = self.imageInfoList[remapIdx]['A_EAT']
             if A>5.5:
                 qualityDescList.append('masterpiece')
             elif A<3:
                 qualityDescList.append('bad art')
                 # isNegativeSample = True
 
-        if 'Q512' in self.imageInfoList[ref[0]].keys():
-            Q = self.imageInfoList[ref[0]]['Q512']
+        if 'Q512' in self.imageInfoList[remapIdx].keys():
+            Q = self.imageInfoList[remapIdx]['Q512']
             if Q>65:
                 qualityDescList.append('high res,best quality')
             elif Q<40:
@@ -261,11 +270,11 @@ class ImageStore:
                 isNegativeSample = True
 
         caption_key = random.choice(['HQ_CAP','DBRU_TAG'])
-        if caption_key in self.imageInfoList[ref[0]].keys():
-            captions = self.imageInfoList[ref[0]][caption_key]
+        if caption_key in self.imageInfoList[remapIdx].keys():
+            captions = self.imageInfoList[remapIdx][caption_key]
         else:
             captions = None
-            #print(self.imageInfoList[ref[0]]['IMG'])
+            #print(self.imageInfoList[remapIdx]['IMG'])
         if captions is None:
             caption = ""
         else:
@@ -471,6 +480,7 @@ class AspectBucket:
         total_dropped = 0
 
         for entry, index in tqdm.tqdm(entries, total=len(self.store)):
+        #for entry, index in entries:
             if not self._process_entry(entry, index):
                 total_dropped += 1
 
@@ -485,8 +495,8 @@ class AspectBucket:
 
         self.total_dropped = total_dropped
 
-    def _process_entry(self, entry: Image.Image, index: int) -> bool:
-        aspect = entry.width / entry.height
+    def _process_entry(self, entry: Dict, index: int) -> bool:
+        aspect = entry['W'] / entry['H']
 
         if aspect > self.max_ratio or (1 / aspect) > self.max_ratio:
             return False
@@ -499,8 +509,6 @@ class AspectBucket:
         bucket = self.buckets[round(float(best_bucket))]
 
         self.bucket_data[bucket].append(index)
-
-        del entry
 
         return True
 
@@ -647,12 +655,13 @@ class AspectDataset(torch.utils.data.Dataset):
 class ARBDataloader:
     def __init__(self, args, tokenizer, text_encoder, device, world_size, rank) -> None:
         self.store = ImageStore(args,args.train_data_dir)
-        self.dataset = AspectDataset(
-            args, self.store, tokenizer, text_encoder, device, ucg=args.ucg)
+
         self.bucket = AspectBucket(self.store, args.num_buckets, args.train_batch_size, args.bucket_side_min,
                               args.bucket_side_max, 64, args.bucket_mode,args.resolution * args.resolution, 2.0)
         self.sampler =  AspectBucketSampler(
             bucket=self.bucket, num_replicas=world_size, rank=rank)
+        self.dataset = AspectDataset(
+            args, self.store, tokenizer, text_encoder, device, ucg=args.ucg)
         print(f'STORE_LEN: {len(self.store)}')
         if args.output_bucket_info:
             print(self.bucket.get_bucket_info())
@@ -664,4 +673,77 @@ class ARBDataloader:
         )
 
 if __name__ == "__main__":
-    pass
+    parser = argparse.ArgumentParser(description="Simple example of a training script.")
+    parser.add_argument(
+        "--train_data_dir",
+        type=str,
+        default='xxcx/ImageInfoWeighted.json',
+        help=(
+            "A folder containing the training data. Folder contents must follow the structure described in"
+            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
+            " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
+        ),
+    )
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        default=1024,
+        help=(
+            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
+            " resolution"
+        ),
+    )
+    parser.add_argument(
+        "--train_batch_size", type=int, default=1, help="Batch size (per device) for the training dataloader."
+    )
+    parser.add_argument(
+        "--rank",
+        type=int,
+        default=4,
+        help=("The dimension of the LoRA update matrices."),
+    )
+    def bool_t(x): return x.lower() in ['true', 'yes', '1']
+    parser.add_argument('--num_buckets', type=int, default=16,
+                        help='The number of buckets.')
+    parser.add_argument('--bucket_mode', type=str, default='maxfit',
+                        help='multiscale|maxfit')
+    parser.add_argument('--bucket_side_min', type=int, default=256,
+                        help='The minimum side length of a bucket.')
+    parser.add_argument('--bucket_side_max', type=int, default=768,
+                        help='The maximum side length of a bucket.')
+    parser.add_argument('--ucg', type=float, default=0.1,
+                        help='Percentage chance of dropping out the text condition per batch. Ranges from 0.0 to 1.0 where 1.0 means 100% text condition dropout.')  # 10% dropout probability
+    parser.add_argument('--shuffle', dest='shuffle', type=bool_t,
+                        default='True', help='Shuffle dataset')
+    parser.add_argument('--output_bucket_info', type=bool_t,
+                        default='False', help='Outputs bucket information and exits')
+    parser.add_argument('--resize', type=bool_t, default='True',
+                        help="Resizes dataset's images to the appropriate bucket dimensions.")
+    parser.add_argument('--extended_validation', type=bool_t, default='False',
+                        help='Perform extended validation of images to catch truncated or corrupt images.')
+    parser.add_argument('--no_migration', type=bool_t, default='True',
+                        help='Do not perform migration of dataset while the `--resize` flag is active. Migration creates an adjacent folder to the dataset with <dataset_dirname>_cropped.')
+    parser.add_argument('--skip_validation', type=bool_t, default='False',
+                        help='Skip validation of images, useful for speeding up loading of very large datasets that have already been validated.')
+
+    parser.add_argument('--clip_penultimate', type=bool_t, default='False',
+                        help='Use penultimate CLIP layer for text embedding')
+    parser.add_argument('--extended_mode_chunks', type=int, default=0,
+                        help='Enables extended mode for tokenization with given amount of maximum chunks. Values < 2 disable.')
+    parser.add_argument('--local_files_only', type=bool_t, default='False',
+                        help='Do not connect to HF')
+    parser.add_argument('--weighted_sample', type=bool_t, default='True',
+                        help='Use weighted sample')
+    args = parser.parse_args()
+
+    arbDataloader = ARBDataloader(args,None,None,'cpu',1,0)
+    from torchvision import utils
+    for i,p in tqdm.tqdm(enumerate(arbDataloader.train_dataloader)):
+        pixel_value = p['pixel_values'][0]
+        input_text = p['input_texts'][0]
+        with open(f'arbTestoutput/{i}.txt','w') as f:
+            f.write(input_text)
+        pixel_value = pixel_value+0.5
+        utils.save_image(pixel_value,f'arbTestoutput/{i}.webp')
+
+        #print(p)
