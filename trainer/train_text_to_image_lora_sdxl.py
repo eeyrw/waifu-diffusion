@@ -494,6 +494,12 @@ def parse_args(input_args=None):
         help=("The dimension of the LoRA update matrices."),
     )
     parser.add_argument(
+        "--lora_alpha",
+        type=int,
+        default=None,
+        help=("The alpha of the LoRA update matrices."),
+    )
+    parser.add_argument(
         "--debug_loss",
         action="store_true",
         help="debug loss for each image, if filenames are awailable in the dataset",
@@ -740,9 +746,11 @@ def main(args):
 
     # now we will add new LoRA weights to the attention layers
     # Set correct lora layers
+    if args.lora_alpha is None:
+        args.lora_alpha = args.rank
     unet_lora_config = LoraConfig(
         r=args.rank,
-        lora_alpha=args.rank,
+        lora_alpha=args.lora_alpha,
         init_lora_weights="gaussian",
         target_modules=["to_k", "to_q", "to_v", "to_out.0"],
     )
