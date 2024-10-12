@@ -342,6 +342,14 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
+        "--first_checkpointing_steps",
+        type=int,
+        default=-1,
+        help=(
+            "Save a checkpoint for first trial"
+        ),
+    )
+    parser.add_argument(
         "--checkpoints_total_limit",
         type=int,
         default=None,
@@ -1179,7 +1187,7 @@ def main(args):
 
                 # DeepSpeed requires saving weights on every device; saving weights only on the main process would cause issues.
                 if accelerator.distributed_type == DistributedType.DEEPSPEED or accelerator.is_main_process:
-                    if global_step % args.checkpointing_steps == 0:
+                    if global_step % args.checkpointing_steps == 0 or global_step == args.first_checkpointing_steps:
                         # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
                         if args.checkpoints_total_limit is not None:
                             checkpoints = os.listdir(args.output_dir)
