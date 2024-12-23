@@ -250,24 +250,28 @@ class ImageStore:
     # gets caption by removing the extension from the filename and replacing it with .txt
     def get_caption(self, ref: Tuple[int, int, int]) -> str:
         qualityDescList = []
+        extraTags = []
         isNegativeSample = False
         remapIdx = self.imagesIdxList[ref[0]]
 
-        if 'A_EAT' in self.imageInfoList[remapIdx].keys():
-            A = self.imageInfoList[remapIdx]['A_EAT']
-            if A>5.5:
-                qualityDescList.append('masterpiece')
-            elif A<3:
-                qualityDescList.append('bad art')
-                # isNegativeSample = True
+        # if 'LBL' in self.imageInfoList[remapIdx].keys() and self.imageInfoList[remapIdx]['LBL']!=-1:
+        #     extraTags.append(f'pose_{self.imageInfoList[remapIdx]['LBL']}')
 
-        if 'Q512' in self.imageInfoList[remapIdx].keys():
-            Q = self.imageInfoList[remapIdx]['Q512']
-            if Q>65:
-                qualityDescList.append('high res,best quality')
-            elif Q<40:
-                qualityDescList.append('low res,low quality')
-                isNegativeSample = True
+        # if 'A_EAT' in self.imageInfoList[remapIdx].keys():
+        #     A = self.imageInfoList[remapIdx]['A_EAT']
+        #     if A>5.5:
+        #         qualityDescList.append('masterpiece')
+        #     elif A<3:
+        #         qualityDescList.append('bad art')
+        #         # isNegativeSample = True
+
+        # if 'Q512' in self.imageInfoList[remapIdx].keys():
+        #     Q = self.imageInfoList[remapIdx]['Q512']
+        #     if Q>65:
+        #         qualityDescList.append('high res,best quality')
+        #     elif Q<40:
+        #         qualityDescList.append('low res,low quality')
+        #         isNegativeSample = True
 
         caption_key = random.choice(['HQ_CAP','DBRU_TAG'])
         if caption_key in self.imageInfoList[remapIdx].keys():
@@ -285,6 +289,7 @@ class ImageStore:
 
             if caption_key == 'DBRU_TAG':
                 tagList = caption.split(',')
+                tagList = tagList+extraTags
                 random.shuffle(tagList)
                 caption = ','.join(tagList)
             # if 'artist' in self.imageInfoList[ref[0]].keys():
@@ -295,8 +300,8 @@ class ImageStore:
         # if random.random() > 0.7:    
         #     caption = caption+','+','.join(qualityDescList)
             
-        random.shuffle(qualityDescList)    
-        caption = ','.join(qualityDescList)+',' + caption
+        #random.shuffle(qualityDescList)    
+        #caption = ','.join(qualityDescList)+',' + caption
         return caption
 
 

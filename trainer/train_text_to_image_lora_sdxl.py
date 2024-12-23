@@ -203,6 +203,12 @@ def parse_args(input_args=None):
         help="Path to pretrained VAE model with better numerical stability. More details: https://github.com/huggingface/diffusers/pull/4038.",
     )
     parser.add_argument(
+        "--pretrained_lora_model_name_or_path",
+        type=str,
+        default=None,
+        help="Path to pretrained LoRa model",
+    )
+    parser.add_argument(
         "--revision",
         type=str,
         default=None,
@@ -240,15 +246,6 @@ def parse_args(input_args=None):
             " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
             " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
         ),
-    )
-    parser.add_argument(
-        "--image_column", type=str, default="image", help="The column of the dataset containing an image."
-    )
-    parser.add_argument(
-        "--caption_column",
-        type=str,
-        default="text",
-        help="The column of the dataset containing a caption or a list of captions.",
     )
     parser.add_argument(
         "--validation_prompt",
@@ -764,6 +761,23 @@ def main(args):
     )
 
     unet.add_adapter(unet_lora_config)
+
+
+    if args.pretrained_lora_model_name_or_path:
+        lora_state_dict, _ = LoraLoaderMixin.lora_state_dict(args.pretrained_lora_model_name_or_path)
+        unet_state_dict = {f'{k.replace("unet.", "")}': v for k, v in lora_state_dict.items() if k.startswith("unet.")}
+        unet_state_dict = convert_unet_state_dict_to_peft(unet_state_dict)
+        incompatible_keys = set_peft_model_state_dict(unet, unet_state_dict, adapter_name="default")
+        if incompatible_keys is not None:
+            # check only for unexpected keys
+            unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
+            if unexpected_keys:
+                logger.warning(
+                    f"Loading adapter weights from state_dict led to unexpected keys not found in the model: "
+                    f" {unexpected_keys}. "
+                )
+
+
 
     # The text encoder comes from 🤗 transformers, we will also attach adapters to it.
     if args.train_text_encoder:
