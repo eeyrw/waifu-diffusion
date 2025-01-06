@@ -274,6 +274,11 @@ class ImageStore:
         #         isNegativeSample = True
 
         caption_key = random.choice(['HQ_CAP','DBRU_TAG'])
+        if caption_key not in self.imageInfoList[remapIdx].keys() and caption_key=='HQ_CAP':
+            caption_key = 'DBRU_TAG'
+        if caption_key not in self.imageInfoList[remapIdx].keys() and caption_key=='DBRU_TAG':
+            caption_key = 'HQ_CAP'
+
         if caption_key in self.imageInfoList[remapIdx].keys():
             captions = self.imageInfoList[remapIdx][caption_key]
         else:
@@ -673,7 +678,7 @@ class ARBDataloader:
         self.train_dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_sampler=self.sampler,
-            num_workers=0,
+            num_workers=args.dataloader_num_workers,
             collate_fn=self.dataset.collate_fn
         )
 
@@ -728,7 +733,7 @@ if __name__ == "__main__":
                         help='Perform extended validation of images to catch truncated or corrupt images.')
     parser.add_argument('--no_migration', type=bool_t, default='True',
                         help='Do not perform migration of dataset while the `--resize` flag is active. Migration creates an adjacent folder to the dataset with <dataset_dirname>_cropped.')
-    parser.add_argument('--skip_validation', type=bool_t, default='False',
+    parser.add_argument('--skip_validation', type=bool_t, default='True',
                         help='Skip validation of images, useful for speeding up loading of very large datasets that have already been validated.')
 
     parser.add_argument('--clip_penultimate', type=bool_t, default='False',
@@ -737,8 +742,16 @@ if __name__ == "__main__":
                         help='Enables extended mode for tokenization with given amount of maximum chunks. Values < 2 disable.')
     parser.add_argument('--local_files_only', type=bool_t, default='False',
                         help='Do not connect to HF')
-    parser.add_argument('--weighted_sample', type=bool_t, default='True',
+    parser.add_argument('--weighted_sample', type=bool_t, default='False',
                         help='Use weighted sample')
+    parser.add_argument(
+        "--dataloader_num_workers",
+        type=int,
+        default=0,
+        help=(
+            "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
+        ),
+    )
     args = parser.parse_args()
 
     arbDataloader = ARBDataloader(args,None,None,'cpu',1,0)
