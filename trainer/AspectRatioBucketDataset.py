@@ -741,7 +741,7 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--train_batch_size", type=int, default=1, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size", type=int, default=2, help="Batch size (per device) for the training dataloader."
     )
     parser.add_argument(
         "--rank",
@@ -794,10 +794,10 @@ if __name__ == "__main__":
     arbDataloader = ARBDataloader(args,None,None,'cpu',1,0)
     from torchvision import utils
     for i,p in tqdm.tqdm(enumerate(arbDataloader.train_dataloader)):
-        pixel_value = p['pixel_values'][0]
-        input_text = p['input_texts'][0]
+        pixel_value = p['pixel_values']
         with open(f'arbTestoutput/{i}.txt','w') as f:
-            f.write(input_text)
+            for input_text in p['input_texts']:
+                f.write(input_text+'\n')
         pixel_value = pixel_value/2+0.5
         utils.save_image(pixel_value,f'arbTestoutput/{i}.webp')
 
