@@ -1,4 +1,6 @@
 import argparse
+from bisect import bisect
+import math
 import torch
 import torchvision
 import os
@@ -324,6 +326,7 @@ class AspectBucket:
                  bucket_side_increment: int = 64,
                  bucket_mode: str = 'multiscale',
                  max_image_area: int = 512 * 768,
+                 multi_resolution=[512,640,768],
                  max_ratio: float = 2):
 
         self.requested_bucket_count = num_buckets
@@ -332,6 +335,7 @@ class AspectBucket:
         self.bucket_increment = bucket_side_increment
         self.bucket_mode = bucket_mode
         self.max_image_area = max_image_area
+        self.multi_resolution = multi_resolution
         self.batch_size = batch_size
         self.total_dropped = 0
 
@@ -341,14 +345,14 @@ class AspectBucket:
             self.max_ratio = max_ratio
 
         self.store = store
-        self.buckets = []
-        self._bucket_ratios = []
-        self._bucket_interp = None
-        self.bucket_data: Dict[tuple, List[int]] = dict()
+        self.buckets = {}
+        self._bucket_ratios = {}
+        self._bucket_interp = {}
+        self.bucket_data: Dict[int,Dict[tuple, List[int]]] = dict()
         self.init_buckets()
         self.fill_buckets()
 
-    def get_buckets(self,mode):
+    def get_buckets(self,mode,maxPixelNum):
         if mode == 'maxfit':
             # https://blog.novelai.net/novelai-improvements-on-stable-diffusion-e10d38db82ac
             # ● Set the width to 256.
@@ -356,8 +360,6 @@ class AspectBucket:
             # • Find the largest height such that height is less than or equal to 1024 and that width multiplied by height is less than or equal to 512 * 768.
             # • Add the resolution given by height and width as a bucket.
             # • Increase the width by 64.
-
-            maxPixelNum =self.max_image_area
             width = self.bucket_length_min
             bucketSet=set()
             #bucketSet.add((min(h,w),min(h,w))) # Add default size
@@ -376,59 +378,62 @@ class AspectBucket:
         return possible_buckets
     
     def init_buckets(self):
-        possible_buckets = self.get_buckets(self.bucket_mode)
+        for resolution in self.multi_resolution:
+            possible_buckets = self.get_buckets(self.bucket_mode,resolution*resolution)
 
-        buckets_by_ratio = {}
+            buckets_by_ratio = {}
 
-        # group the buckets by their aspect ratios
-        for bucket in possible_buckets:
-            w, h = bucket
-            # use precision to avoid spooky floats messing up your day
-            ratio = '{:.4e}'.format(w / h)
+            # group the buckets by their aspect ratios
+            for bucket in possible_buckets:
+                w, h = bucket
+                # use precision to avoid spooky floats messing up your day
+                ratio = '{:.4e}'.format(w / h)
 
-            if ratio not in buckets_by_ratio:
-                group = set()
-                buckets_by_ratio[ratio] = group
-            else:
-                group = buckets_by_ratio[ratio]
+                if ratio not in buckets_by_ratio:
+                    group = set()
+                    buckets_by_ratio[ratio] = group
+                else:
+                    group = buckets_by_ratio[ratio]
 
-            group.add(bucket)
+                group.add(bucket)
 
-        # now we take the list of buckets we generated and pick the largest by area for each (the first sorted)
-        # then we put all of those in a list, sorted by the aspect ratio
-        # the square bucket (LxL) will be the first
-        unique_ratio_buckets = sorted([sorted(buckets, key=_sort_by_area)[-1]
-                                       for buckets in buckets_by_ratio.values()], key=_sort_by_ratio)
+            # now we take the list of buckets we generated and pick the largest by area for each (the first sorted)
+            # then we put all of those in a list, sorted by the aspect ratio
+            # the square bucket (LxL) will be the first
+            unique_ratio_buckets = sorted([sorted(buckets, key=_sort_by_area)[-1]
+                                        for buckets in buckets_by_ratio.values()], key=_sort_by_ratio)
 
-        # how many buckets to create for each side of the distribution
-        bucket_count_each = int(
-            np.clip((self.requested_bucket_count + 1) / 2, 1, len(unique_ratio_buckets)))
+            # how many buckets to create for each side of the distribution
+            bucket_count_each = int(
+                np.clip((self.requested_bucket_count + 1) / 2, 1, len(unique_ratio_buckets)))
 
-        # we know that the requested_bucket_count must be an odd number, so the indices we calculate
-        # will include the square bucket and some linearly spaced buckets along the distribution
-        indices = {
-            *np.linspace(0, len(unique_ratio_buckets) - 1, bucket_count_each, dtype=int)}
+            # we know that the requested_bucket_count must be an odd number, so the indices we calculate
+            # will include the square bucket and some linearly spaced buckets along the distribution
+            indices = {
+                *np.linspace(0, len(unique_ratio_buckets) - 1, bucket_count_each, dtype=int)}
 
-        # make the buckets, make sure they are unique (to remove the duplicated square bucket), and sort them by ratio
-        # here we add the portrait buckets by reversing the dimensions of the landscape buckets we generated above
-        buckets = sorted({*(unique_ratio_buckets[i] for i in indices),
-                          *(tuple(reversed(unique_ratio_buckets[i])) for i in indices)}, key=_sort_by_ratio)
+            # make the buckets, make sure they are unique (to remove the duplicated square bucket), and sort them by ratio
+            # here we add the portrait buckets by reversing the dimensions of the landscape buckets we generated above
+            buckets = sorted({*(unique_ratio_buckets[i] for i in indices),
+                            *(tuple(reversed(unique_ratio_buckets[i])) for i in indices)}, key=_sort_by_ratio)
 
-        self.buckets = buckets
+            self.buckets[resolution] = buckets
 
-        # cache the bucket ratios and the interpolator that will be used for calculating the best bucket later
-        # the interpolator makes a 1d piecewise interpolation where the input (x-axis) is the bucket ratio,
-        # and the output is the bucket index in the self.buckets array
-        # to find the best fit we can just round that number to get the index
-        self._bucket_ratios = [w / h for w, h in buckets]
-        self._bucket_interp = interp1d(self._bucket_ratios, list(range(len(buckets))), assume_sorted=True,
-                                       fill_value=None)
+            # cache the bucket ratios and the interpolator that will be used for calculating the best bucket later
+            # the interpolator makes a 1d piecewise interpolation where the input (x-axis) is the bucket ratio,
+            # and the output is the bucket index in the self.buckets array
+            # to find the best fit we can just round that number to get the index
+            self._bucket_ratios[resolution] = [w / h for w, h in buckets]
+            self._bucket_interp[resolution] = interp1d(self._bucket_ratios[resolution], list(range(len(buckets))), assume_sorted=True,
+                                        fill_value=None)
 
-        for b in buckets:
-            self.bucket_data[b] = []
+            for b in buckets:
+                self.bucket_data.setdefault(resolution,{b:[]}).update({b:[]})
+
 
     def get_batch_count(self):
-        return sum(len(b) // self.batch_size for b in self.bucket_data.values())
+        return sum(sum(len(b) // self.batch_size for b in bucket_data_single.values()) \
+                   for bucket_data_single in self.bucket_data.values())
 
     def get_bucket_info(self):
         return json.dumps({"buckets": self.buckets, "bucket_ratios": self._bucket_ratios})
@@ -443,31 +448,46 @@ class AspectBucket:
         where each image is an index into the dataset
         :return:
         """
-        max_bucket_len = max(len(b) for b in self.bucket_data.values())
+        bucket_data_merged = {}
+        buckets_merged = set()
+        
+        for res,buckets_single in self.buckets.items():
+            buckets_merged.update(buckets_single)
+        buckets_merged = list(buckets_merged)
+
+        for res,bucket_data_single in self.bucket_data.items():
+            for b,idcs in bucket_data_single.items():
+                bucket_data_merged.setdefault(b,[]).extend(idcs)
+        
+
+
+        max_bucket_len = max(len(b) for b in bucket_data_merged.values())
         index_schedule = list(range(max_bucket_len))
         random.shuffle(index_schedule)
 
-        bucket_len_table = {
-            b: len(self.bucket_data[b]) for b in self.buckets
-        }
+        bucket_len_table = {}
+        bucket_len_table.update({
+            b: len(bucket_data_merged[b]) for b in buckets_merged
+        })
 
         bucket_schedule = []
-        for i, b in enumerate(self.buckets):
+        for i, b in enumerate(buckets_merged):
             bucket_schedule.extend(
                 [i] * (bucket_len_table[b] // self.batch_size))
 
         random.shuffle(bucket_schedule)
 
+
         bucket_pos = {
-            b: 0 for b in self.buckets
+            b: 0 for b in buckets_merged
         }
 
         total_generated_by_bucket = {
-            b: 0 for b in self.buckets
+            b: 0 for b in buckets_merged
         }
 
         for bucket_index in bucket_schedule:
-            b = self.buckets[bucket_index]
+            b = buckets_merged[bucket_index]
             i = bucket_pos[b]
             bucket_len = bucket_len_table[b]
 
@@ -476,7 +496,7 @@ class AspectBucket:
                 # advance in the schedule until we find an index that is contained in the bucket
                 k = index_schedule[i]
                 if k < bucket_len:
-                    entry = self.bucket_data[b][k]
+                    entry = bucket_data_merged[b][k]
                     batch.append(entry)
 
                 i += 1
@@ -494,31 +514,39 @@ class AspectBucket:
             if not self._process_entry(entry, index):
                 total_dropped += 1
 
-        for b, values in self.bucket_data.items():
-            # shuffle the entries for extra randomness and to make sure dropped elements are also random
-            random.shuffle(values)
+        for res,bucket_data_single in self.bucket_data.items():
+            for b, values in bucket_data_single.items():
+                # shuffle the entries for extra randomness and to make sure dropped elements are also random
+                random.shuffle(values)
 
-            # make sure the buckets have an exact number of elements for the batch
-            to_drop = len(values) % self.batch_size
-            self.bucket_data[b] = list(values[:len(values) - to_drop])
-            total_dropped += to_drop
+                # make sure the buckets have an exact number of elements for the batch
+                to_drop = len(values) % self.batch_size
+                self.bucket_data[res][b] = list(values[:len(values) - to_drop])
+                total_dropped += to_drop
 
-        self.total_dropped = total_dropped
+            self.total_dropped = total_dropped
 
     def _process_entry(self, entry: Dict, index: int) -> bool:
+        def getBestFitRes(squareWidth, breakpoints):
+            i = bisect(breakpoints, squareWidth,lo=0)-1
+            if i<0:
+                i=0
+            return breakpoints[i]
+
         aspect = entry['W'] / entry['H']
+        res = getBestFitRes(math.sqrt(entry['W']* entry['H']),self.multi_resolution)
 
         if aspect > self.max_ratio or (1 / aspect) > self.max_ratio:
             return False
 
-        best_bucket = self._bucket_interp(aspect)
+        best_bucket = self._bucket_interp[res](aspect)
 
         if best_bucket is None:
             return False
 
-        bucket = self.buckets[round(float(best_bucket))]
+        bucket = self.buckets[res][round(float(best_bucket))]
 
-        self.bucket_data[bucket].append(index)
+        self.bucket_data[res][bucket].append(index)
 
         return True
 
@@ -667,7 +695,7 @@ class ARBDataloader:
         self.store = ImageStore(args,args.train_data_dir)
 
         self.bucket = AspectBucket(self.store, args.num_buckets, args.train_batch_size, args.bucket_side_min,
-                              args.bucket_side_max, 64, args.bucket_mode,args.resolution * args.resolution, 2.0)
+                              args.bucket_side_max, 64, args.bucket_mode,args.resolution * args.resolution, args.multi_resolution,2.0)
         self.sampler =  AspectBucketSampler(
             bucket=self.bucket, num_replicas=world_size, rank=rank)
         self.dataset = AspectDataset(
@@ -687,7 +715,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--train_data_dir",
         type=str,
-        default='xxcx/ImageInfoWeighted.json',
+        default='xxx',
         help=(
             "A folder containing the training data. Folder contents must follow the structure described in"
             " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
@@ -701,6 +729,15 @@ if __name__ == "__main__":
         help=(
             "The resolution for input images, all the images in the train/validation dataset will be resized to this"
             " resolution"
+        ),
+    )
+
+    parser.add_argument(
+        "--multi_resolution",
+        type=lambda x:list(map(int, x.split(','))),
+        default=[512,640,768,1024],
+        help=(
+            'The multiple resolution bucket'
         ),
     )
     parser.add_argument(
@@ -719,7 +756,7 @@ if __name__ == "__main__":
                         help='multiscale|maxfit')
     parser.add_argument('--bucket_side_min', type=int, default=256,
                         help='The minimum side length of a bucket.')
-    parser.add_argument('--bucket_side_max', type=int, default=768,
+    parser.add_argument('--bucket_side_max', type=int, default=1280,
                         help='The maximum side length of a bucket.')
     parser.add_argument('--ucg', type=float, default=0.1,
                         help='Percentage chance of dropping out the text condition per batch. Ranges from 0.0 to 1.0 where 1.0 means 100% text condition dropout.')  # 10% dropout probability
@@ -761,7 +798,7 @@ if __name__ == "__main__":
         input_text = p['input_texts'][0]
         with open(f'arbTestoutput/{i}.txt','w') as f:
             f.write(input_text)
-        pixel_value = pixel_value+0.5
+        pixel_value = pixel_value/2+0.5
         utils.save_image(pixel_value,f'arbTestoutput/{i}.webp')
 
         #print(p)

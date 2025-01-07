@@ -518,6 +518,14 @@ def parse_args(input_args=None):
                         help='The minimum side length of a bucket.')
     parser.add_argument('--bucket_side_max', type=int, default=768,
                         help='The maximum side length of a bucket.')
+    parser.add_argument(
+        "--multi_resolution",
+        type=lambda x:list(map(int, x.split(','))),
+        default=[512,640,768,1024],
+        help=(
+            'The multiple resolution bucket'
+        ),
+    )
     parser.add_argument('--ucg', type=float, default=0.1,
                         help='Percentage chance of dropping out the text condition per batch. Ranges from 0.0 to 1.0 where 1.0 means 100% text condition dropout.')  # 10% dropout probability
     parser.add_argument('--shuffle', dest='shuffle', type=bool_t,
