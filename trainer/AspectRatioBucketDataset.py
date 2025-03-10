@@ -735,7 +735,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--multi_resolution",
         type=lambda x:list(map(int, x.split(','))),
-        default=[512,640,768,1024],
+        default=[512,640,704,768,832,896,1024],
         help=(
             'The multiple resolution bucket'
         ),
