@@ -1,5 +1,6 @@
 import argparse
 from bisect import bisect
+import getpass
 import math
 import torch
 import torchvision
@@ -24,6 +25,60 @@ from scipy.interpolate import interp1d
 from pillow_heif import register_heif_opener
 register_heif_opener()
 
+from Crypto.Cipher import AES
+from Crypto.Util import Padding
+import io
+
+class CryptDatasetReader:
+    def __init__(self):
+        self.key=None
+        self.keyBytes=None
+        self.isCryptDs=False
+
+    def accquireKey(self):
+        if self.key is None:
+            if 'DS_PASSWORD' not in os.environ.keys():
+                # try:
+                #     self.key = getpass.getpass()
+                # except Exception as error:
+                #     print('ERROR', error)
+                # else:
+                #     pass #print('Password entered:', key)
+                pass
+            else:
+                self.key = os.environ['DS_PASSWORD']
+                os.environ['DS_PASSWORD'] = self.key
+                self.keyBytes = self.key.encode('utf8')
+                self.keyBytes = Padding.pad(self.keyBytes, 16, style='pkcs7')
+
+
+    def decrypt(self,f):
+        self.accquireKey()
+        tag = f.read(16)
+        nonce = f.read(15)
+        ciphertext = f.read()
+
+        cipher = AES.new(self.keyBytes, AES.MODE_OCB, nonce=nonce)
+        return cipher.decrypt_and_verify(ciphertext, tag)
+    
+    def readImage(self,fp):
+        if not self.isCryptDs:
+            return Image.open(fp)
+        else:
+            return Image.open(io.BytesIO(self.decrypt(fp)))
+        
+
+    def readJson(self,fp):
+        try:
+            return json.load(fp)
+        except Exception as e:
+            self.isCryptDs = True
+            fp.seek(0)
+            return json.loads(self.decrypt(fp))
+        
+
+globalCryptDsReader = CryptDatasetReader()
+    
 def _sort_by_ratio(bucket: tuple) -> float:
     return bucket[0] / bucket[1]
 
@@ -114,7 +169,7 @@ class Validation():
 
     def __validate(self, fp: str) -> bool:
         try:
-            Image.open(fp)
+            globalCryptDsReader.readImage(fp)
             return True
         except:
             print(f'WARNING: Image cannot be opened: {fp}')
@@ -122,7 +177,7 @@ class Validation():
 
     def __extended_validate(self, fp: str) -> bool:
         try:
-            Image.open(fp).load()
+            globalCryptDsReader.readImage(fp).load()
             return True
         except (OSError) as error:
             if 'truncated' in str(error):
@@ -157,8 +212,10 @@ class Resize():
         self.resize = self.__no_migration
 
     def __no_migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
+        with open(image_path,'rb') as f:
+            image = globalCryptDsReader.readImage(f)
         return fitByVisualCenter(
-            Image.open(image_path),
+            image,
             (w, h),
             visual_center=visual_center,
             method=Image.Resampling.BICUBIC
@@ -166,23 +223,29 @@ class Resize():
 
     def __migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
         filename = re.sub(r'\.[^/.]+$', '', os.path.split(image_path)[1])
-
+        with open(image_path,'rb') as f:
+            image = globalCryptDsReader.readImage(f)
         image = fitByVisualCenter(
-            Image.open(image_path),
+            image,
             (w, h),
             visual_center=visual_center,
             method=Image.Resampling.BICUBIC
         ).convert(mode='RGB')
 
-        image.save(
-            os.path.join(f'{self.__directory}', f'{filename}.jpg'),
-            optimize=True
-        )
+        if not globalCryptDsReader.isCryptDs:
+            image.save(
+                os.path.join(f'{self.__directory}', f'{filename}.jpg'),
+                optimize=True
+            )
+        else:
+            raise RuntimeError('Mirgation under crypt dataset is not allowed')
 
         return image
 
     def __no_op(self, image_path: str, w: int, h: int) -> Img:
-        return Image.open(image_path)
+        with open(image_path,'rb') as f:
+            image = globalCryptDsReader.readImage(f)
+        return image
 
 
 class ImageStore:
@@ -196,8 +259,8 @@ class ImageStore:
 
         _, file_extension = os.path.splitext(imageInfoJsonPath)
         if file_extension == '.json':
-            with open(imageInfoJsonPath, "r") as f:
-                self.imageInfoList = json.load(f)
+            with open(imageInfoJsonPath, "rb") as f:
+                self.imageInfoList = globalCryptDsReader.readJson(f)
         elif file_extension == '.jsonl':
             raise NotImplementedError('Not implement jsonl')     
 
@@ -615,74 +678,6 @@ class AspectDataset(torch.utils.data.Dataset):
         pixel_values.to(memory_format=torch.contiguous_format).float()
         input_texts = [example['input_text']
                                    for example in examples if example is not None]
-        # if self.args.extended_mode_chunks < 2:
-        #     max_length = self.tokenizer.model_max_length - 2
-        #     input_ids = [self.tokenizer([example['input_ids']], truncation=True, return_length=True, return_overflowing_tokens=False,
-        #                                 padding=False, add_special_tokens=False, max_length=max_length).input_ids for example in examples if example is not None]
-        # else:
-        #     max_length = self.tokenizer.model_max_length
-        #     max_chunks = self.args.extended_mode_chunks
-        #     input_ids = [self.tokenizer([example['input_ids']], truncation=True, return_length=True, return_overflowing_tokens=False, padding=False, add_special_tokens=False, max_length=(
-        #         max_length * max_chunks) - (max_chunks * 2)).input_ids[0] for example in examples if example is not None]
-
-        # tokens = input_ids
-
-        # if self.args.extended_mode_chunks < 2:
-        #     for i, x in enumerate(input_ids):
-        #         for j, y in enumerate(x):
-        #             input_ids[i][j] = [self.tokenizer.bos_token_id, *y, *np.full(
-        #                 (self.tokenizer.model_max_length - len(y) - 1), self.tokenizer.eos_token_id)]
-
-        #     if self.args.clip_penultimate:
-        #         input_ids = [self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(input_id).to(
-        #             self.device), output_hidden_states=True)['hidden_states'][-2])[0] for input_id in input_ids]
-        #     else:
-        #         input_ids = [self.text_encoder(torch.asarray(input_id).to(
-        #             self.device), output_hidden_states=True).last_hidden_state[0] for input_id in input_ids]
-        # else:
-        #     max_standard_tokens = max_length - 2
-        #     max_chunks = self.args.extended_mode_chunks
-        #     max_len = np.ceil(max(len(x) for x in input_ids) /
-        #                       max_standard_tokens).astype(int).item() * max_standard_tokens
-        #     if max_len > max_standard_tokens:
-        #         z = None
-        #         for i, x in enumerate(input_ids):
-        #             if len(x) < max_len:
-        #                 input_ids[i] = [
-        #                     *x, *np.full((max_len - len(x)), self.tokenizer.eos_token_id)]
-        #         batch_t = torch.tensor(input_ids)
-        #         chunks = [batch_t[:, i:i + max_standard_tokens]
-        #                   for i in range(0, max_len, max_standard_tokens)]
-        #         for chunk in chunks:
-        #             chunk = torch.cat((torch.full((chunk.shape[0], 1), self.tokenizer.bos_token_id), chunk, torch.full(
-        #                 (chunk.shape[0], 1), self.tokenizer.eos_token_id)), 1)
-        #             if z is None:
-        #                 if self.args.clip_penultimate:
-        #                     z = self.text_encoder.text_model.final_layer_norm(self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True)['hidden_states'][-2])
-        #                 else:
-        #                     z = self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True).last_hidden_state
-        #             else:
-        #                 if self.args.clip_penultimate:
-        #                     z = torch.cat((z, self.text_encoder.text_model.final_layer_norm(self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True)['hidden_states'][-2])), dim=-2)
-        #                 else:
-        #                     z = torch.cat((z, self.text_encoder(
-        #                         chunk.to(self.device), output_hidden_states=True).last_hidden_state), dim=-2)
-        #         input_ids = z
-        #     else:
-        #         for i, x in enumerate(input_ids):
-        #             input_ids[i] = [self.tokenizer.bos_token_id, *x, *np.full(
-        #                 (self.tokenizer.model_max_length - len(x) - 1), self.tokenizer.eos_token_id)]
-        #         if self.args.clip_penultimate:
-        #             input_ids = self.text_encoder.text_model.final_layer_norm(self.text_encoder(
-        #                 torch.asarray(input_ids).to(self.device), output_hidden_states=True)['hidden_states'][-2])
-        #         else:
-        #             input_ids = self.text_encoder(torch.asarray(input_ids).to(
-        #                 self.device), output_hidden_states=True).last_hidden_state
-        # input_ids = torch.stack(tuple(input_ids))
-
         return {
             'pixel_values': pixel_values,
             'input_texts': input_texts,
