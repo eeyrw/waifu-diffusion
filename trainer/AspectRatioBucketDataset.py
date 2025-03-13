@@ -212,8 +212,7 @@ class Resize():
         self.resize = self.__no_migration
 
     def __no_migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
-        with open(image_path,'rb') as f:
-            image = globalCryptDsReader.readImage(f)
+        image = globalCryptDsReader.readImage(open(image_path,'rb'))
         return fitByVisualCenter(
             image,
             (w, h),
@@ -223,8 +222,7 @@ class Resize():
 
     def __migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
         filename = re.sub(r'\.[^/.]+$', '', os.path.split(image_path)[1])
-        with open(image_path,'rb') as f:
-            image = globalCryptDsReader.readImage(f)
+        image = globalCryptDsReader.readImage(open(image_path,'rb'))
         image = fitByVisualCenter(
             image,
             (w, h),
@@ -243,8 +241,7 @@ class Resize():
         return image
 
     def __no_op(self, image_path: str, w: int, h: int) -> Img:
-        with open(image_path,'rb') as f:
-            image = globalCryptDsReader.readImage(f)
+        image = globalCryptDsReader.readImage(open(image_path,'rb'))
         return image
 
 
