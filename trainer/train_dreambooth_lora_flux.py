@@ -210,10 +210,12 @@ def log_validation(
 
 
 def import_model_class_from_model_name_or_path(
-    pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"
+    pretrained_model_name_or_path: str,
+      cache_dir,local_files_only,varint,
+      revision: str, subfolder: str = "text_encoder"
 ):
     text_encoder_config = PretrainedConfig.from_pretrained(
-        pretrained_model_name_or_path, subfolder=subfolder, revision=revision
+        pretrained_model_name_or_path,cache_dir=cache_dir, local_files_only = local_files_only,subfolder=subfolder,varint=varint, revision=revision
     )
     model_class = text_encoder_config.architectures[0]
     if model_class == "CLIPTextModel":
@@ -372,6 +374,12 @@ def parse_args(input_args=None):
         default="flux-dreambooth-lora",
         help="The output directory where the model predictions and checkpoints will be written.",
     )
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        default=None,
+        help="The directory where the downloaded models and datasets will be stored.",
+    )
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
         "--resolution",
@@ -422,6 +430,14 @@ def parse_args(input_args=None):
             "Save a checkpoint of the training state every X updates. These checkpoints can be used both as final"
             " checkpoints in case they are better than the last checkpoint, and are also suitable for resuming"
             " training using `--resume_from_checkpoint`."
+        ),
+    )
+    parser.add_argument(
+        "--first_checkpointing_steps",
+        type=int,
+        default=-1,
+        help=(
+            "Save a checkpoint for first trial"
         ),
     )
     parser.add_argument(
@@ -482,7 +498,15 @@ def parse_args(input_args=None):
         default="constant",
         help=(
             'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
+            ' "constant", "constant_with_warmup", "multistep_lr"]'
+        ),
+    )
+    parser.add_argument(
+        "--multistep_milestone",
+        type=lambda x:list(map(int, x.split(','))),
+        default=[10,20],
+        help=(
+            'The multistep lr scheduler milestone'
         ),
     )
     parser.add_argument(
@@ -656,6 +680,46 @@ def parse_args(input_args=None):
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
 
+    parser.add_argument(
+        "--debug_loss",
+        action="store_true",
+        help="debug loss for each image, if filenames are awailable in the dataset",
+    )
+    def bool_t(x): return x.lower() in ['true', 'yes', '1']
+    parser.add_argument('--num_buckets', type=int, default=16,
+                        help='The number of buckets.')
+    parser.add_argument('--bucket_mode', type=str, default='maxfit',
+                        help='multiscale|maxfit')
+    parser.add_argument('--bucket_side_min', type=int, default=256,
+                        help='The minimum side length of a bucket.')
+    parser.add_argument('--bucket_side_max', type=int, default=768,
+                        help='The maximum side length of a bucket.')
+    parser.add_argument(
+        "--multi_resolution",
+        type=lambda x:list(map(int, x.split(','))),
+        default=[512,640,768,1024],
+        help=(
+            'The multiple resolution bucket'
+        ),
+    )
+    parser.add_argument('--ucg', type=float, default=0.1,
+                        help='Percentage chance of dropping out the text condition per batch. Ranges from 0.0 to 1.0 where 1.0 means 100% text condition dropout.')  # 10% dropout probability
+    parser.add_argument('--shuffle', dest='shuffle', type=bool_t,
+                        default='True', help='Shuffle dataset')
+    parser.add_argument('--output_bucket_info', type=bool_t,
+                        default='False', help='Outputs bucket information and exits')
+    parser.add_argument('--resize', type=bool_t, default='True',
+                        help="Resizes dataset's images to the appropriate bucket dimensions.")
+    parser.add_argument('--extended_validation', type=bool_t, default='False',
+                        help='Perform extended validation of images to catch truncated or corrupt images.')
+    parser.add_argument('--no_migration', type=bool_t, default='True',
+                        help='Do not perform migration of dataset while the `--resize` flag is active. Migration creates an adjacent folder to the dataset with <dataset_dirname>_cropped.')
+    parser.add_argument('--skip_validation', type=bool_t, default='False',
+                        help='Skip validation of images, useful for speeding up loading of very large datasets that have already been validated.')
+    parser.add_argument('--local_files_only', type=bool_t, default='False',
+                        help='Do not connect to HF')
+    parser.add_argument('--weighted_sample', type=bool_t, default='False',
+                        help='Use weighted sample')
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -1134,24 +1198,30 @@ def main(args):
         args.pretrained_model_name_or_path,
         subfolder="tokenizer",
         revision=args.revision,
+        local_files_only=args.local_files_only,cache_dir=args.cache_dir
+
     )
     tokenizer_two = T5TokenizerFast.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="tokenizer_2",
         revision=args.revision,
+        local_files_only=args.local_files_only,cache_dir=args.cache_dir
+
     )
 
     # import correct text encoder classes
     text_encoder_cls_one = import_model_class_from_model_name_or_path(
-        args.pretrained_model_name_or_path, args.revision
+         args.pretrained_model_name_or_path,args.cache_dir,args.local_files_only, args.variant,args.revision
     )
     text_encoder_cls_two = import_model_class_from_model_name_or_path(
-        args.pretrained_model_name_or_path, args.revision, subfolder="text_encoder_2"
+         args.pretrained_model_name_or_path,args.cache_dir,args.local_files_only, args.variant,args.revision, subfolder="text_encoder_2"
     )
 
     # Load scheduler and models
     noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="scheduler"
+        args.pretrained_model_name_or_path, subfolder="scheduler",
+        local_files_only=args.local_files_only,cache_dir=args.cache_dir
+
     )
     noise_scheduler_copy = copy.deepcopy(noise_scheduler)
     text_encoder_one, text_encoder_two = load_text_encoders(text_encoder_cls_one, text_encoder_cls_two)
@@ -1160,9 +1230,11 @@ def main(args):
         subfolder="vae",
         revision=args.revision,
         variant=args.variant,
+        local_files_only=args.local_files_only,cache_dir=args.cache_dir
     )
     transformer = FluxTransformer2DModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant
+        args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant,
+        local_files_only=args.local_files_only,cache_dir=args.cache_dir
     )
 
     # We only train the additional adapter LoRA layers
@@ -1407,24 +1479,20 @@ def main(args):
         )
 
     # Dataset and DataLoaders creation:
-    train_dataset = DreamBoothDataset(
-        instance_data_root=args.instance_data_dir,
-        instance_prompt=args.instance_prompt,
-        class_prompt=args.class_prompt,
-        class_data_root=args.class_data_dir if args.with_prior_preservation else None,
-        class_num=args.num_class_images,
-        size=args.resolution,
-        repeats=args.repeats,
-        center_crop=args.center_crop,
-    )
-
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=args.train_batch_size,
-        shuffle=True,
-        collate_fn=lambda examples: collate_fn(examples, args.with_prior_preservation),
-        num_workers=args.dataloader_num_workers,
-    )
+    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
+    # download the dataset.
+    def get_world_size() -> int:
+        if not torch.distributed.is_initialized():
+            return 1
+        return torch.distributed.get_world_size()
+    
+    from AspectRatioBucketDataset import ARBDataloader
+    ws = get_world_size()
+    rk = args.local_rank
+    if rk == -1:
+        rk = 0
+    arbDataloader = ARBDataloader(args,None,None,accelerator.device,ws,rk)
+    train_dataloader = arbDataloader.train_dataloader
 
     if not args.train_text_encoder:
         tokenizers = [tokenizer_one, tokenizer_two]
@@ -1557,7 +1625,7 @@ def main(args):
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num examples = {len(arbDataloader.dataset)}")
     logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
