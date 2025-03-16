@@ -203,6 +203,17 @@ def parse_args(input_args=None):
         help="Path to pretrained VAE model with better numerical stability. More details: https://github.com/huggingface/diffusers/pull/4038.",
     )
     parser.add_argument(
+        "--vae_type",
+        type=str,
+        default='SDVAE',
+        help="Use different VAE such as EQVAE",
+    )
+    parser.add_argument(
+        "--force_32bit_vae",
+        action="store_true",
+        help="always use 32bit vae",
+    )
+    parser.add_argument(
         "--pretrained_lora_model_name_or_path",
         type=str,
         default=None,
@@ -696,17 +707,31 @@ def main(args):
         args.pretrained_model_name_or_path, subfolder="text_encoder_2", revision=args.revision, variant=args.variant,
         local_files_only=args.local_files_only,cache_dir=args.cache_dir
     )
+
     vae_path = (
         args.pretrained_model_name_or_path
         if args.pretrained_vae_model_name_or_path is None
         else args.pretrained_vae_model_name_or_path
     )
-    vae = AutoencoderKL.from_pretrained(
-        vae_path,
-        subfolder="vae" if args.pretrained_vae_model_name_or_path is None else None,
-        revision=args.revision,
-        local_files_only=args.local_files_only,cache_dir=args.cache_dir
-    )
+
+    try:
+        vae = AutoencoderKL.from_pretrained(
+            vae_path,
+            subfolder='vae',
+            revision=args.revision,
+            local_files_only=args.local_files_only,cache_dir=args.cache_dir
+        )
+    except Exception as e:
+        try:
+            vae = AutoencoderKL.from_pretrained(
+            vae_path,
+            subfolder=None,
+            revision=args.revision,
+            local_files_only=args.local_files_only,cache_dir=args.cache_dir
+            )
+        except Exception as e:
+            raise RuntimeError('No way to load VAE!')
+
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant,
         local_files_only=args.local_files_only,cache_dir=args.cache_dir
@@ -730,10 +755,11 @@ def main(args):
     # The VAE is in float32 to avoid NaN losses.
     unet.to(accelerator.device, dtype=weight_dtype)
 
-    if args.pretrained_vae_model_name_or_path is None:
+    if args.force_32bit_vae:
         vae.to(accelerator.device, dtype=torch.float32)
     else:
-        vae.to(accelerator.device, dtype=weight_dtype)
+        vae.to(accelerator.device)
+
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
 
@@ -1096,15 +1122,19 @@ def main(args):
             batch = process_batch(raw_batch)
             with accelerator.accumulate(unet):
                 # Convert images to latent space
-                if args.pretrained_vae_model_name_or_path is not None:
+                if vae.dtype !=torch.float32:
                     pixel_values = batch["pixel_values"].to(accelerator.device,dtype=weight_dtype)
                 else:
-                    pixel_values = batch["pixel_values"]
+                    pixel_values = batch["pixel_values"].to(accelerator.device)
 
-                model_input = vae.encode(pixel_values).latent_dist.sample()
-                model_input = model_input * vae.config.scaling_factor
-                if args.pretrained_vae_model_name_or_path is None:
-                    model_input = model_input.to(weight_dtype)
+                latent = vae.encode(pixel_values).latent_dist.sample()
+                if args.vae_type == 'SDVAE':
+                    latent = latent * vae.config.scaling_factor
+                elif args.vae_type == 'EQVAE':
+                    latent_mean = torch.tensor(vae.config.latents_mean)[None, :, None, None].to(accelerator.device)
+                    latents_std = torch.tensor(vae.config.latents_std)[None, :, None, None].to(accelerator.device)
+                    latent = (latent -latent_mean) / latents_std
+                model_input = latent.to(weight_dtype)
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(model_input)
