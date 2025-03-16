@@ -1,0 +1,31 @@
+accelerate launch trainer/train_lora_flux.py \
+  --pretrained_model_name_or_path="black-forest-labs/FLUX.1-dev" \
+  --train_data_dir="PUT YOUR DATASET PATH HERE" \
+  --skip_validation=True \
+  --weighted_sample=False \
+  --bucket_mode="maxfit" \
+  --bucket_side_min=256 \
+  --bucket_side_max=1280 \
+  --multi_resolution=512,574,640,704,768,832,896,960,1024 \
+  --output_bucket_info=True \
+  --train_batch_size=1 \
+  --dataloader_num_workers=4 \
+  --ucg=0.01 \
+  --num_train_epochs=30 --checkpointing_steps=16000 --first_checkpointing_steps=8000 \
+  --learning_rate=1e-3 --lr_scheduler="multistep_lr" --multistep_milestone=400000,800000,1200000 --lr_warmup_steps=0 \
+  --seed=42 \
+  --output_dir="WEIGHT OUTPUT DIR" \
+  --validation_epochs=10000 \
+  --cache_dir "PRETRAIN WEIGHT CACHE DIR" \
+  --mixed_precision="bf16" \
+  --gradient_accumulation_steps=1 \
+  --rank=4 \
+  --local_files_only=True \
+  --optimizer=AdamW
+
+#  --use_8bit_adam \
+#  --gradient_checkpointing
+#  --variant "fp16" \
+#  --resume_from_checkpoint="latest" \
+#  --report_to="wandb" \
+#  --config_file xxx.yaml 
