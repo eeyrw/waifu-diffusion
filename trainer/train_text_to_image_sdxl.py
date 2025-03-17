@@ -792,6 +792,22 @@ def main(args):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
         def save_model_hook(models, weights, output_dir):
             if accelerator.is_main_process:
+
+                # Create frozen part of weights only in one time
+                frozenWeightDir = os.path.join(args.output_dir,'FROZEN_PARTS')
+                if not os.path.exists(frozenWeightDir):
+                    pipeline = StableDiffusionXLPipeline.from_pretrained(
+                        args.pretrained_model_name_or_path,
+                        vae=vae,
+                        revision=args.revision,
+                        variant=args.variant,
+                        torch_dtype=weight_dtype,
+                        feature_extractor=None,#CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
+                        cache_dir=args.cache_dir
+                    )
+                    pipeline.save_pretrained(frozenWeightDir,safe_serialization=True)
+                    shutil.rmtree(os.path.join(frozenWeightDir,'unet'))
+
                 if args.use_ema:
                     ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
 
@@ -801,6 +817,23 @@ def main(args):
                     # make sure to pop weight so that corresponding model is not saved again
                     if weights:
                         weights.pop()
+
+                for frozenWeightPath in ['scheduler',
+                                         'text_encoder','text_encoder_2',
+                                         'tokenizer','tokenizer_2',
+                                         'vae',
+                                         'model_index.json']:
+                    if not os.path.exists(os.path.join(output_dir,frozenWeightPath)):                    
+                        os.symlink(
+                            os.path.abspath(os.path.join(frozenWeightDir,frozenWeightPath)),
+                            os.path.abspath(os.path.join(output_dir,frozenWeightPath))
+                            )
+                    if args.use_ema:
+                        if not os.path.exists(os.path.join(output_dir,frozenWeightPath)):
+                            os.symlink(
+                                os.path.abspath(os.path.join(frozenWeightDir,frozenWeightPath)),
+                                os.path.abspath(os.path.join(output_dir,frozenWeightPath))
+                                )
 
         def load_model_hook(models, input_dir):
             if args.use_ema:
@@ -1137,7 +1170,7 @@ def main(args):
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     params_to_clip = unet.parameters()
-                    accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                    #accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
