@@ -147,6 +147,23 @@ def parse_args(input_args=None):
         help="Path to pretrained VAE model with better numerical stability. More details: https://github.com/huggingface/diffusers/pull/4038.",
     )
     parser.add_argument(
+        "--vae_type",
+        type=str,
+        default='SDVAE',
+        help="Use different VAE such as EQVAE",
+    )
+    parser.add_argument(
+        "--force_32bit_vae",
+        action="store_true",
+        help="always use 32bit vae",
+    )
+    parser.add_argument(
+        "--pretrained_lora_model_name_or_path",
+        type=str,
+        default=None,
+        help="Path to pretrained LoRa model",
+    )
+    parser.add_argument(
         "--revision",
         type=str,
         default=None,
@@ -690,24 +707,30 @@ def main(args):
         local_files_only=args.local_files_only,cache_dir=args.cache_dir
     )
 
-    if args.pretrained_model_name_or_path and os.path.isdir(args.pretrained_model_name_or_path):
-        vae_path_type = 'localDir'
-    elif args.pretrained_model_name_or_path and os.path.isfile(args.pretrained_model_name_or_path):
-        raise NotImplementedError
-    else:
-        vae_path_type = 'hfRepo'
-
     vae_path = (
         args.pretrained_model_name_or_path
         if args.pretrained_vae_model_name_or_path is None
         else args.pretrained_vae_model_name_or_path
     )
-    vae = AutoencoderKL.from_pretrained(
-        vae_path,
-        subfolder="vae" if args.pretrained_vae_model_name_or_path is None else None,
-        revision=args.revision,
-        local_files_only=args.local_files_only,cache_dir=args.cache_dir
-    )
+
+    try:
+        vae = AutoencoderKL.from_pretrained(
+            vae_path,
+            subfolder='vae',
+            revision=args.revision,
+            local_files_only=args.local_files_only,cache_dir=args.cache_dir
+        )
+    except Exception as e:
+        try:
+            vae = AutoencoderKL.from_pretrained(
+            vae_path,
+            subfolder=None,
+            revision=args.revision,
+            local_files_only=args.local_files_only,cache_dir=args.cache_dir
+            )
+        except Exception as e:
+            raise RuntimeError('No way to load VAE!')
+
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant,
         local_files_only=args.local_files_only,cache_dir=args.cache_dir
@@ -730,7 +753,12 @@ def main(args):
 
     # Move unet, vae and text_encoder to device and cast to weight_dtype
     # The VAE is in float32 to avoid NaN losses.
-    vae.to(accelerator.device, dtype=torch.float32)
+    unet.to(accelerator.device, dtype=weight_dtype)
+
+    if args.force_32bit_vae:
+        vae.to(accelerator.device, dtype=torch.float32)
+    else:
+        vae.to(accelerator.device)
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
 
@@ -904,8 +932,8 @@ def main(args):
         accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]=args.train_batch_size
 
     # Prepare everything with our `accelerator`.
-    unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, optimizer, train_dataloader, lr_scheduler
+    unet, optimizer, lr_scheduler = accelerator.prepare(
+        unet, optimizer, lr_scheduler
     )
 
     if args.use_ema:
@@ -1000,9 +1028,14 @@ def main(args):
                 else:
                     pixel_values = batch["pixel_values"].to(accelerator.device)
                 with torch.no_grad():
-                    model_input = vae.encode(pixel_values).latent_dist.sample()
-                model_input = model_input * vae.config.scaling_factor
-                model_input = model_input.to(weight_dtype)
+                    latent = vae.encode(pixel_values).latent_dist.sample()
+                if args.vae_type == 'SDVAE':
+                    latent = latent * vae.config.scaling_factor
+                elif args.vae_type == 'EQVAE':
+                    latent_mean = torch.tensor(vae.config.latents_mean)[None, :, None, None].to(accelerator.device)
+                    latents_std = torch.tensor(vae.config.latents_std)[None, :, None, None].to(accelerator.device)
+                    latent = (latent -latent_mean) / latents_std
+                model_input = latent.to(weight_dtype)
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(model_input)
                 if args.noise_offset:
@@ -1093,7 +1126,9 @@ def main(args):
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
-
+                if args.debug_loss and "filenames" in batch:
+                    for fname in batch["filenames"]:
+                        accelerator.log({"loss_for_" + fname: loss}, step=global_step)
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
