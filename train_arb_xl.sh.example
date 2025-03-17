@@ -15,7 +15,7 @@
   --dataloader_num_workers=4 \
   --ucg=0.01 \
   --num_train_epochs=30 --checkpointing_steps=8000 --first_checkpointing_steps=2000 \
-  --learning_rate=5e-5 --lr_scheduler="multistep_lr" --multistep_milestone=400000,800000,1200000 --lr_warmup_steps=0 \
+  --learning_rate=5e-6 --lr_scheduler="multistep_lr" --multistep_milestone=400000,800000,1200000 --lr_warmup_steps=0 \
   --seed=42 \
   --output_dir="OUTPUT_DIR" \
   --validation_epochs=10000 \
