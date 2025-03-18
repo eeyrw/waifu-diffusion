@@ -65,8 +65,10 @@ class CryptDatasetReader:
         if not self.isCryptDs:
             return Image.open(fp)
         else:
-            return Image.open(io.BytesIO(self.decrypt(fp)))
-        
+            with open(fp, "rb") as f:
+                img = Image.open(io.BytesIO(self.decrypt(f)))
+            return img
+
 
     def readJson(self,fp):
         try:
@@ -212,7 +214,7 @@ class Resize():
         self.resize = self.__no_migration
 
     def __no_migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
-        image = globalCryptDsReader.readImage(open(image_path,'rb'))
+        image = globalCryptDsReader.readImage(image_path)
         return fitByVisualCenter(
             image,
             (w, h),
@@ -222,7 +224,7 @@ class Resize():
 
     def __migration(self, image_path: str, w: int, h: int, visual_center=(0.5,0.5)) -> Img:
         filename = re.sub(r'\.[^/.]+$', '', os.path.split(image_path)[1])
-        image = globalCryptDsReader.readImage(open(image_path,'rb'))
+        image = globalCryptDsReader.readImage(image_path)
         image = fitByVisualCenter(
             image,
             (w, h),
@@ -241,7 +243,7 @@ class Resize():
         return image
 
     def __no_op(self, image_path: str, w: int, h: int) -> Img:
-        image = globalCryptDsReader.readImage(open(image_path,'rb'))
+        image = globalCryptDsReader.readImage(image_path)
         return image
 
 
