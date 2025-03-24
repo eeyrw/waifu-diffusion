@@ -28,7 +28,7 @@ import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 import transformers
-import wandb
+#import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
@@ -72,10 +72,12 @@ VALIDATION_PROMPTS = [
 
 
 def import_model_class_from_model_name_or_path(
-    pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"
+    pretrained_model_name_or_path: str,
+      cache_dir,local_files_only,varint,
+      revision: str, subfolder: str = "text_encoder"
 ):
     text_encoder_config = PretrainedConfig.from_pretrained(
-        pretrained_model_name_or_path, subfolder=subfolder, revision=revision
+        pretrained_model_name_or_path,cache_dir=cache_dir, local_files_only = local_files_only,subfolder=subfolder,varint=varint, revision=revision
     )
     model_class = text_encoder_config.architectures[0]
 
@@ -222,7 +224,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--dataset_split_name",
         type=str,
-        default="validation",
+        default="train",
         help="Dataset split to be used during training. Helpful to specify for conducting experimental runs.",
     )
     parser.add_argument(
@@ -470,6 +472,9 @@ def parse_args(input_args=None):
         default="diffusion-dpo-lora-sdxl",
         help=("The name of the tracker to report results to."),
     )
+    def bool_t(x): return x.lower() in ['true', 'yes', '1']
+    parser.add_argument('--local_files_only', type=bool_t, default='False',
+                        help='Do not connect to HF')
 
     if input_args is not None:
         args = parser.parse_args(input_args)
