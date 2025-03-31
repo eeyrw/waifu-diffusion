@@ -55,7 +55,13 @@ from diffusers.loaders import StableDiffusionXLLoraLoaderMixin
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, convert_state_dict_to_diffusers
 from diffusers.utils.import_utils import is_xformers_available
-
+from accelerate.utils import DistributedDataParallelKwargs, DistributedType, ProjectConfiguration, set_seed
+from diffusers.utils import (
+    check_min_version,
+    convert_state_dict_to_diffusers,
+    convert_unet_state_dict_to_peft,
+    is_wandb_available,
+)
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.25.0.dev0")
@@ -1118,8 +1124,9 @@ def main(args):
                 progress_bar.update(1)
                 global_step += 1
 
-                if accelerator.is_main_process:
-                    if global_step % args.checkpointing_steps == 0:
+                # DeepSpeed requires saving weights on every device; saving weights only on the main process would cause issues.
+                if accelerator.distributed_type == DistributedType.DEEPSPEED or accelerator.is_main_process:
+                    if global_step % args.checkpointing_steps == 0 or global_step == args.first_checkpointing_steps:
                         # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
                         if args.checkpoints_total_limit is not None:
                             checkpoints = os.listdir(args.output_dir)
