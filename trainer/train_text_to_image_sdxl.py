@@ -1170,7 +1170,9 @@ def main(args):
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     params_to_clip = unet.parameters()
-                    #accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                    grad_norm = accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                    if accelerator.is_main_process:
+                        print(f"Grad norm before clip: {grad_norm}")
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
