@@ -610,13 +610,12 @@ class AspectBucket:
         if not candidate_buckets:
             return False
 
-        # 先按长宽比差排序，选 top-k，然后随机 pick 一个
+        # 先按长宽比差排序，选 top-k
         candidate_buckets.sort(key=lambda x: x[3])
         top_k = min(3, len(candidate_buckets))
-        chosen_bucket = rng.choice(candidate_buckets[:top_k])
 
-        best_res, bw, bh, _ = chosen_bucket
-        self.bucket_data[best_res][(bw, bh)].append(index)
+        for best_res, bw, bh, _ in candidate_buckets[:top_k]:
+            self.bucket_data[best_res][(bw, bh)].append(index)
         return True
 
 
