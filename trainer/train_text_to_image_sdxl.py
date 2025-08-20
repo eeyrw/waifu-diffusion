@@ -1052,6 +1052,7 @@ def main(args):
 
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
+        arbDataloader.sampler.set_epoch(epoch)
         for step, raw_batch in enumerate(train_dataloader):
             batch = process_batch(raw_batch)
             with accelerator.accumulate(unet):

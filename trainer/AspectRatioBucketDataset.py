@@ -13,7 +13,7 @@ import numpy as np
 import json
 import re
 import shutil
-
+from torch.utils.data.sampler import BatchSampler
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from PIL import Image, ImageOps
@@ -412,6 +412,7 @@ class AspectBucket:
         self._bucket_interp = {}
         self.bucket_data: Dict[int,Dict[tuple, List[int]]] = dict()
         self.init_buckets()
+        self._build_bucket_lookup()
         self.fill_buckets()
 
     def get_buckets(self,mode,maxPixelNum):
@@ -500,140 +501,164 @@ class AspectBucket:
     def get_bucket_info(self):
         return json.dumps({"buckets": self.buckets, "bucket_ratios": self._bucket_ratios})
 
-    def get_batch_iterator(self) -> Generator[Tuple[Tuple[int, int, int]], None, None]:
+    def get_batch_iterator(self, rng: "random.Random" = None, rank: int = 0, num_replicas: int = 1) -> Generator[Tuple[Tuple[int, int, int]], None, None]:
         """
-        Generator that provides batches where the images in a batch fall on the same bucket
-
-        Each element generated will be:
-            (index, w, h)
-
-        where each image is an index into the dataset
-        :return:
+        Lazy generator that yields batches [(idx,w,h), ...] distributed by rank.
         """
+        if rng is None:
+            rng = random.Random()
+
+        # merge bucket_data across resolutions
         bucket_data_merged = {}
         buckets_merged = set()
-        
-        for res,buckets_single in self.buckets.items():
+        for res, buckets_single in self.buckets.items():
             buckets_merged.update(buckets_single)
         buckets_merged = list(buckets_merged)
 
-        for res,bucket_data_single in self.bucket_data.items():
-            for b,idcs in bucket_data_single.items():
-                bucket_data_merged.setdefault(b,[]).extend(idcs)
-        
+        for res, bucket_data_single in self.bucket_data.items():
+            for b, idcs in bucket_data_single.items():
+                bucket_data_merged.setdefault(b, []).extend(idcs)
 
+        # lengths
+        bucket_len_table = {b: len(bucket_data_merged.get(b, [])) for b in buckets_merged}
 
-        max_bucket_len = max(len(b) for b in bucket_data_merged.values())
+        # build index schedule and bucket schedule
+        max_bucket_len = max(bucket_len_table.values(), default=0)
         index_schedule = list(range(max_bucket_len))
-        random.shuffle(index_schedule)
-
-        bucket_len_table = {}
-        bucket_len_table.update({
-            b: len(bucket_data_merged[b]) for b in buckets_merged
-        })
+        rng.shuffle(index_schedule)
 
         bucket_schedule = []
         for i, b in enumerate(buckets_merged):
-            bucket_schedule.extend(
-                [i] * (bucket_len_table[b] // self.batch_size))
+            bucket_schedule.extend([i] * (bucket_len_table[b] // self.batch_size))
+        rng.shuffle(bucket_schedule)
 
-        random.shuffle(bucket_schedule)
+        bucket_pos = {b: 0 for b in buckets_merged}
 
-
-        bucket_pos = {
-            b: 0 for b in buckets_merged
-        }
-
-        total_generated_by_bucket = {
-            b: 0 for b in buckets_merged
-        }
-
-        for bucket_index in bucket_schedule:
+        # iterate bucket_schedule lazily
+        for i, bucket_index in enumerate(bucket_schedule):
+            # 只保留属于当前 rank 的 batch
+            if (i % num_replicas) != rank:
+                continue
             b = buckets_merged[bucket_index]
-            i = bucket_pos[b]
-            bucket_len = bucket_len_table[b]
-
+            i_pos = bucket_pos[b]
             batch = []
             while len(batch) != self.batch_size:
-                # advance in the schedule until we find an index that is contained in the bucket
-                k = index_schedule[i]
-                if k < bucket_len:
+                if i_pos >= len(index_schedule):
+                    break
+                k = index_schedule[i_pos]
+                if k < bucket_len_table[b]:
                     entry = bucket_data_merged[b][k]
                     batch.append(entry)
+                i_pos += 1
+            bucket_pos[b] = i_pos
+            if len(batch) == self.batch_size:
+                yield [(idx, *b) for idx in batch]
 
-                i += 1
-
-            total_generated_by_bucket[b] += self.batch_size
-            bucket_pos[b] = i
-            yield [(idx, *b) for idx in batch]
 
     def fill_buckets(self):
         entries = self.store.entries_iterator()
         total_dropped = 0
 
         for entry, index in tqdm.tqdm(entries, total=len(self.store)):
-        #for entry, index in entries:
             if not self._process_entry(entry, index):
                 total_dropped += 1
 
         for res,bucket_data_single in self.bucket_data.items():
             for b, values in bucket_data_single.items():
-                # shuffle the entries for extra randomness and to make sure dropped elements are also random
-                random.shuffle(values)
-
-                # make sure the buckets have an exact number of elements for the batch
+                # 不在 init 时 shuffle，延迟到迭代时使用可控 rng 进行 shuffle
                 to_drop = len(values) % self.batch_size
+                # 保证被丢弃的元素是末尾元素（可考虑用 rng 在迭代时随机丢弃）
                 self.bucket_data[res][b] = list(values[:len(values) - to_drop])
                 total_dropped += to_drop
 
-            self.total_dropped = total_dropped
+        self.total_dropped = total_dropped
 
-    def _process_entry(self, entry: Dict, index: int) -> bool:
-        def getBestFitRes(squareWidth, breakpoints):
-            i = bisect(breakpoints, squareWidth,lo=0)-1
-            if i<0:
-                i=0
-            return breakpoints[i]
 
-        aspect = entry['W'] / entry['H']
-        res = getBestFitRes(math.sqrt(entry['W']* entry['H']),self.multi_resolution)
+    # 在 AspectBucket._build_bucket_lookup 中添加
+    def _build_bucket_lookup(self):
+        """
+        构建平铺 bucket 列表，并缓存 ratio 以加速 _process_entry
+        """
+        self._all_buckets = [(res, bw, bh) for res, bucket_list in self.buckets.items() for bw, bh in bucket_list]
+        # 预计算 ratio
+        self._bucket_ratios_flat = [(res, bw, bh, bw / bh) for res, bw, bh in self._all_buckets]
 
+    def _process_entry(self, entry: Dict, index: int, max_downscale: float = 2.0, rng: random.Random = None) -> bool:
+        """
+        Process a single image entry and assign it to a bucket.
+        Supports downsampling only: bucket dimensions <= original image.
+        rng: 用于保证 epoch 可重复的随机数
+        """
+        if rng is None:
+            rng = random.Random()
+        
+        orig_w, orig_h = entry['W'], entry['H']
+        aspect = orig_w / orig_h
+
+        # 丢弃过极端的长宽比
         if aspect > self.max_ratio or (1 / aspect) > self.max_ratio:
             return False
 
-        best_bucket = self._bucket_interp[res](aspect)
+        # 找出所有满足条件的 candidate buckets
+        candidate_buckets = [
+            (res, bw, bh, abs(aspect - r))
+            for res, bw, bh, r in self._bucket_ratios_flat
+            if bw <= orig_w and bh <= orig_h  # 分辨率必须 <= 原图
+            and orig_w/bw <= max_downscale and orig_h/bh <= max_downscale
+        ]
 
-        if best_bucket is None:
+        if not candidate_buckets:
             return False
 
-        bucket = self.buckets[res][round(float(best_bucket))]
+        # 先按长宽比差排序，选 top-k，然后随机 pick 一个
+        candidate_buckets.sort(key=lambda x: x[3])
+        top_k = min(3, len(candidate_buckets))
+        chosen_bucket = rng.choice(candidate_buckets[:top_k])
 
-        self.bucket_data[res][bucket].append(index)
-
+        best_res, bw, bh, _ = chosen_bucket
+        self.bucket_data[best_res][(bw, bh)].append(index)
         return True
 
-from torch.utils.data.sampler import Sampler,BatchSampler
 
 class AspectBucketSampler(BatchSampler):
     def __init__(self, 
                  bucket: AspectBucket,
                  num_replicas: int = 1, 
                  rank: int = 0,
-                batch_size: int = 1,
-                 drop_last: bool = False):
-        #super().__init__(None)
+                 batch_size: int = 1,
+                 drop_last: bool = False,
+                 base_seed: int = 42):
+        # Note: we don't call super().__init__ because we implement __iter__ ourselves
         self.bucket = bucket
         self.num_replicas = num_replicas
         self.rank = rank
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.base_seed = int(base_seed)
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int):
+        """Call this at the start of each epoch (DDP convention)"""
+        self.epoch = int(epoch)
+
+    def _get_rng_for_epoch(self):
+        # deterministic per (base_seed, epoch)
+        return random.Random(self.base_seed + self.epoch)
 
     def __iter__(self):
-        # subsample the bucket to only include the elements that are assigned to this rank
-        indices = self.bucket.get_batch_iterator()
-        indices = list(indices)[self.rank::self.num_replicas]
-        return iter(indices)
+        rng = self._get_rng_for_epoch()
+        # 直接把 rank 和 num_replicas 传入 bucket 的迭代器，内部完成分配
+        yield from self.bucket.get_batch_iterator(rng=rng, rank=self.rank, num_replicas=self.num_replicas)
 
     def __len__(self):
-        return self.bucket.get_batch_count() // self.num_replicas
+        # compute how many batches this sampler will yield for this rank
+        total = self.bucket.get_batch_count()
+        per = total // self.num_replicas
+        remainder = total % self.num_replicas
+        # distribute the remainder to first `remainder` ranks
+        if self.rank < remainder:
+            per += 1
+        return per
 
 
 class AspectDataset(torch.utils.data.Dataset):
@@ -729,7 +754,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--multi_resolution",
         type=lambda x:list(map(int, x.split(','))),
-        default=[512,640,704,768,832,896,960,1024],
+        default=[512,574,640,704,768,832,896,960,1024],
         help=(
             'The multiple resolution bucket'
         ),
