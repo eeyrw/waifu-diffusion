@@ -93,7 +93,24 @@ def merge_rank_outputs(output_dir, num_replicas,
         f.write("BucketWidth\tBucketHeight\tTotalUsageCount\n")
         for (bw, bh), count in OrderedDict(sorted(merged_bucket_count.items(), key=lambda item: item[1], reverse=True)).items():
             f.write(f"{bw}\t{bh}\t{count}\n")
-
+    # ----------------------
+    # 每张图片训练次数直方图
+    # ----------------------
+    train_counts = [len(buckets) for buckets in merged_image_map.values()]
+    counter = Counter(train_counts)
+    xs = sorted(counter.keys())
+    ys = [counter[x] for x in xs]
+    plt.figure(figsize=(10,6))
+    plt.bar(xs, ys, width=0.8)
+    plt.xlabel("Number of times each image was used in training")
+    plt.ylabel("Number of images")
+    plt.title("Histogram of image training counts (all epochs and buckets)")
+    plt.xticks(xs)
+    plt.tight_layout()
+    train_count_file = os.path.join(output_dir, "image_train_count_histogram.png")
+    plt.savefig(train_count_file)
+    plt.close()
+    print(f"Image training count histogram saved to {train_count_file}")
 
     # ----------------------
     # 绘制按桶尺寸排序的直方图（带宽高标注）
