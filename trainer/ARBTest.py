@@ -4,7 +4,7 @@ import os
 import torch
 import torch.multiprocessing as mp
 from collections import OrderedDict, defaultdict, Counter
-from AspectRatioBucketDataset import AspectBucket, AspectBucketSampler, ImageStore
+from OptAspectRatioBucketDataset import AspectBucket, AspectBucketSampler, ImageStore
 import matplotlib.pyplot as plt
 
 class DummyImageStore(ImageStore):
@@ -165,7 +165,7 @@ def merge_rank_outputs(output_dir, num_replicas,
 
     print(f"Merged outputs written: {merged_file_path}, {merged_bucket_file_path}, stats: {stats_file_path}")
 
-def run_distributed_test(args, num_replicas=4, num_epochs=3, output_dir="bucket_test_output"):
+def run_distributed_test(args, num_replicas=4, num_epochs=10, output_dir="bucket_test_output"):
     mp.spawn(worker, args=(num_replicas, args, num_epochs, output_dir), nprocs=num_replicas, join=True)
     merge_rank_outputs(output_dir, num_replicas)
 
