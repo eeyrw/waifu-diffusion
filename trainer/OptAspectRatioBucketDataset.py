@@ -408,6 +408,7 @@ class AspectBucket:
         self.store = store
         self.buckets = {}
         self.bucket_data: Dict[int,Dict[tuple, List[int]]] = dict()
+        self._bucket_candidate_cache: Dict[int, List[Tuple[int,int,int]]] = {}  # 新增缓存
         self.init_buckets()
         self._build_bucket_lookup()
         self.fill_buckets()
@@ -571,7 +572,7 @@ class AspectBucket:
         """
         if rng is None:
             rng = random.Random()
-        
+
         orig_w, orig_h = entry['W'], entry['H']
         aspect = orig_w / orig_h
 
@@ -579,23 +580,31 @@ class AspectBucket:
         if aspect > self.max_ratio or (1 / aspect) > self.max_ratio:
             return False
 
-        # 找出所有满足条件的 candidate buckets
-        candidate_buckets = [
-            (res, bw, bh, abs(aspect - r))
-            for res, bw, bh, r in self._bucket_ratios_flat
-            if bw <= orig_w and bh <= orig_h  # 分辨率必须 <= 原图
-            and orig_w/bw <= max_downscale and orig_h/bh <= max_downscale
-        ]
+        # 检查缓存
+        if index in self._bucket_candidate_cache:
+            candidate_buckets = self._bucket_candidate_cache[index]
+        else:
+            # 找出所有满足条件的 candidate buckets
+            candidate_buckets = [
+                (res, bw, bh)
+                for res, bw, bh, r in self._bucket_ratios_flat
+                if bw <= orig_w and bh <= orig_h  # 分辨率必须 <= 原图
+                and orig_w / bw <= max_downscale and orig_h / bh <= max_downscale
+            ]
+            # 按比例差排序并保留 top-k
+            candidate_buckets.sort(key=lambda x: abs(orig_w / orig_h - x[1] / x[2]))
+            top_k = min(3, len(candidate_buckets))
+            candidate_buckets = candidate_buckets[:top_k]
+
+            # 缓存
+            self._bucket_candidate_cache[index] = candidate_buckets
 
         if not candidate_buckets:
             return False
 
-        # 先按长宽比差排序，选 top-k
-        candidate_buckets.sort(key=lambda x: x[3])
-        top_k = min(3, len(candidate_buckets))
-
-        for best_res, bw, bh, _ in candidate_buckets[:top_k]:
+        for best_res, bw, bh in candidate_buckets:
             self.bucket_data[best_res][(bw, bh)].append(index)
+
         return True
 
 
