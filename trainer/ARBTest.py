@@ -57,7 +57,8 @@ def worker(rank, num_replicas, args, num_epochs, output_dir):
 def merge_rank_outputs(output_dir, num_replicas,
                        merged_file="merged_image_bucket.txt",
                        merged_bucket_file="merged_bucket_usage.txt",
-                       stats_file="bucket_stats.txt"):
+                       stats_file="bucket_stats.txt",
+                       _bucket_to_res=None):
     """整合 rank 输出并生成统计分析"""
     merged_image_map = defaultdict(list)
     merged_bucket_count = defaultdict(int)
@@ -93,6 +94,7 @@ def merge_rank_outputs(output_dir, num_replicas,
         f.write("BucketWidth\tBucketHeight\tTotalUsageCount\n")
         for (bw, bh), count in OrderedDict(sorted(merged_bucket_count.items(), key=lambda item: item[1], reverse=True)).items():
             f.write(f"{bw}\t{bh}\t{count}\n")
+
     # ----------------------
     # 每张图片训练次数直方图
     # ----------------------
@@ -107,7 +109,6 @@ def merge_rank_outputs(output_dir, num_replicas,
     plt.ylabel("Number of images")
     plt.title("Histogram of image training counts (all epochs and buckets)")
     plt.xticks(xs)
-    # y 轴设为对数刻度
     plt.yscale("log")
     plt.tight_layout()
     train_count_file = os.path.join(output_dir, "image_train_count_histogram.png")
@@ -126,7 +127,7 @@ def merge_rank_outputs(output_dir, num_replicas,
     counts = [x[3] for x in bucket_sizes]
     labels = [f"{bw}×{bh}" for bw, bh, _, _ in bucket_sizes]  # 显示宽高
 
-    plt.figure(figsize=(max(12, len(labels)//2),6))  # 宽度随桶数量增加
+    plt.figure(figsize=(max(12, len(labels)//2),6))
     plt.bar(range(len(sizes)), counts, tick_label=labels)
     plt.xlabel("Bucket (Width×Height)")
     plt.ylabel("Number of images")
@@ -138,23 +139,44 @@ def merge_rank_outputs(output_dir, num_replicas,
     plt.close()
     print(f"Bucket histogram with sizes saved to {hist_file}")
 
+    # ----------------------
+    # 绘制分辨率大类直方图
+    # ----------------------
+    if _bucket_to_res is not None:
+        res_count_map = defaultdict(int)
+        for (bw, bh), count in merged_bucket_count.items():
+            if (bw, bh) in _bucket_to_res:
+                res = _bucket_to_res[(bw, bh)]
+                res_count_map[res] += count
+
+        resolutions = sorted(res_count_map.keys())
+        counts_res = [res_count_map[r] for r in resolutions]
+
+        plt.figure(figsize=(10,6))
+        bars = plt.bar(range(len(resolutions)), counts_res, tick_label=resolutions)
+        plt.bar_label(bars, fmt="%d", label_type="edge", fontsize=8, padding=2)
+        plt.xlabel("Resolution Category")
+        plt.ylabel("Number of images")
+        plt.title("Histogram of images per resolution category")
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        res_hist_file = os.path.join(output_dir, "resolution_histogram.png")
+        plt.savefig(res_hist_file)
+        plt.close()
+        print(f"Resolution histogram saved to {res_hist_file}")
+
     # ======== 统计分析 ========
     total_images = len(merged_image_map)
     total_buckets = len(merged_bucket_count)
-
-    # 每个桶出现次数分布
     bucket_usage_values = list(merged_bucket_count.values())
     max_usage = max(bucket_usage_values) if bucket_usage_values else 0
     min_usage = min(bucket_usage_values) if bucket_usage_values else 0
     avg_usage = sum(bucket_usage_values)/len(bucket_usage_values) if bucket_usage_values else 0
-
-    # 每张图片的桶多样性统计
     image_bucket_diversity = [len(set(b_list)) for b_list in merged_image_map.values()]
     max_diversity = max(image_bucket_diversity) if image_bucket_diversity else 0
     min_diversity = min(image_bucket_diversity) if image_bucket_diversity else 0
     avg_diversity = sum(image_bucket_diversity)/len(image_bucket_diversity) if image_bucket_diversity else 0
 
-    # 写统计分析文件
     stats_file_path = os.path.join(output_dir, stats_file)
     with open(stats_file_path, "w") as f:
         f.write(f"TotalImages\t{total_images}\n")
@@ -168,9 +190,36 @@ def merge_rank_outputs(output_dir, num_replicas,
 
     print(f"Merged outputs written: {merged_file_path}, {merged_bucket_file_path}, stats: {stats_file_path}")
 
-def run_distributed_test(args, num_replicas=4, num_epochs=10, output_dir="bucket_test_output"):
-    mp.spawn(worker, args=(num_replicas, args, num_epochs, output_dir), nprocs=num_replicas, join=True)
-    merge_rank_outputs(output_dir, num_replicas)
+
+def run_distributed_test(args, num_replicas=4, num_epochs=3, output_dir="bucket_test_output"):
+    # 创建输出目录
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 先在主进程里实例化 DummyImageStore 和 AspectBucket
+    store = DummyImageStore(args, args.train_data_dir)
+    bucket = AspectBucket(
+        store,
+        args.num_buckets,
+        args.train_batch_size,
+        args.bucket_side_min,
+        args.bucket_side_max,
+        64,
+        args.bucket_mode,
+        args.resolution * args.resolution,
+        args.multi_resolution,
+        max_ratio=2.3
+    )
+
+    # 启动多进程 worker
+    mp.spawn(
+        worker,
+        args=(num_replicas, args, num_epochs, output_dir),
+        nprocs=num_replicas,
+        join=True
+    )
+
+    # 合并输出时传入 bucket._bucket_to_res
+    merge_rank_outputs(output_dir, num_replicas, _bucket_to_res=bucket._bucket_to_res)
 
 
 if __name__ == "__main__":
