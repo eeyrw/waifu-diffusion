@@ -388,7 +388,7 @@ class AspectBucket:
                  bucket_mode: str = 'multiscale',
                  max_image_area: int = 512 * 768,
                  multi_resolution=[512,640,768],
-                 max_ratio: float = 2):
+                 max_ratio: float = 2.3):
 
         self.requested_bucket_count = num_buckets
         self.bucket_length_min = bucket_side_min
@@ -411,7 +411,8 @@ class AspectBucket:
         self._bucket_candidate_cache: Dict[int, List[Tuple[int,int,int]]] = {}  # 新增缓存
         self.init_buckets()
         self._build_bucket_lookup()
-        self.fill_buckets()
+        rng  = random.Random(42)
+        self.fill_buckets(rng)
 
     def get_buckets(self,mode,maxPixelNum):
         if mode == 'maxfit':
@@ -536,13 +537,21 @@ class AspectBucket:
         for batch in all_batches:
             yield batch
 
-    def fill_buckets(self):
+    def fill_buckets(self,rng: random.Random = None):
         entries = self.store.entries_iterator()
-        total_dropped = 0
+        total_dropped_by_bucket_match = 0
+        total_dropped_by_align_to_batch = 0
+
+
+        # 清空原有 bucket_data
+        for res, bucket_data_single in self.bucket_data.items():
+            for b in bucket_data_single.keys():
+                bucket_data_single[b] = []
+
 
         for entry, index in tqdm.tqdm(entries, total=len(self.store)):
-            if not self._process_entry(entry, index):
-                total_dropped += 1
+            if not self._process_entry(entry, index,rng=rng):
+                total_dropped_by_bucket_match += 1
 
         for res,bucket_data_single in self.bucket_data.items():
             for b, values in bucket_data_single.items():
@@ -550,9 +559,11 @@ class AspectBucket:
                 to_drop = len(values) % self.batch_size
                 # 保证被丢弃的元素是末尾元素（可考虑用 rng 在迭代时随机丢弃）
                 self.bucket_data[res][b] = list(values[:len(values) - to_drop])
-                total_dropped += to_drop
+                total_dropped_by_align_to_batch += to_drop
 
-        self.total_dropped = total_dropped
+        self.total_dropped = total_dropped_by_bucket_match + total_dropped_by_align_to_batch
+        print(f'total_dropped_by_bucket_match: {total_dropped_by_bucket_match}')
+        print(f'total_dropped_by_align_to_batch: {total_dropped_by_align_to_batch}')
 
 
     # 在 AspectBucket._build_bucket_lookup 中添加
@@ -563,6 +574,8 @@ class AspectBucket:
         self._all_buckets = [(res, bw, bh) for res, bucket_list in self.buckets.items() for bw, bh in bucket_list]
         # 预计算 ratio
         self._bucket_ratios_flat = [(res, bw, bh, bw / bh) for res, bw, bh in self._all_buckets]
+
+        self._bucket_to_res = {b:res for res, bucket_list in self.buckets.items() for b in bucket_list}
 
     def _process_entry(self, entry: Dict, index: int, max_downscale: float = 2.0, rng: random.Random = None) -> bool:
         """
@@ -579,6 +592,8 @@ class AspectBucket:
         # 丢弃过极端的长宽比
         if aspect > self.max_ratio or (1 / aspect) > self.max_ratio:
             return False
+        
+        max_bucket_res = max(self.buckets.keys())
 
         # 检查缓存
         if index in self._bucket_candidate_cache:
@@ -588,8 +603,8 @@ class AspectBucket:
             candidate_buckets = [
                 (res, bw, bh)
                 for res, bw, bh, r in self._bucket_ratios_flat
-                if bw <= orig_w and bh <= orig_h  # 分辨率必须 <= 原图
-                and orig_w / bw <= max_downscale and orig_h / bh <= max_downscale
+                if res*res<=orig_w*orig_h 
+                and min((orig_w*orig_h),max_bucket_res*max_bucket_res) / (res*res) <= (max_downscale*max_downscale)
             ]
             # 按比例差排序并保留 top-k
             candidate_buckets.sort(key=lambda x: abs(orig_w / orig_h - x[1] / x[2]))
@@ -602,10 +617,17 @@ class AspectBucket:
         if not candidate_buckets:
             return False
 
-        for best_res, bw, bh in candidate_buckets:
-            self.bucket_data[best_res][(bw, bh)].append(index)
+        # 每个 epoch 随机选一个 bucket
+        chosen_bucket = rng.choice(candidate_buckets)
+        self.bucket_data[chosen_bucket[0]][(chosen_bucket[1], chosen_bucket[2])].append(index)
+        
+
+        # for best_res, bw, bh in candidate_buckets:
+        #     self.bucket_data[best_res][(bw, bh)].append(index)
 
         return True
+
+
 
 
 class AspectBucketSampler(BatchSampler):
@@ -628,6 +650,8 @@ class AspectBucketSampler(BatchSampler):
     def set_epoch(self, epoch: int):
         """Call this at the start of each epoch (DDP convention)"""
         self.epoch = int(epoch)
+        rng = random.Random(self.base_seed + self.epoch)
+        self.bucket.fill_buckets(rng=rng)
 
     def _get_rng_for_epoch(self):
         # deterministic per (base_seed, epoch)
@@ -702,7 +726,7 @@ class ARBDataloader:
         self.store = ImageStore(args,args.train_data_dir)
 
         self.bucket = AspectBucket(self.store, args.num_buckets, args.train_batch_size, args.bucket_side_min,
-                              args.bucket_side_max, 64, args.bucket_mode,args.resolution * args.resolution, args.multi_resolution,2.0)
+                              args.bucket_side_max, 64, args.bucket_mode,args.resolution * args.resolution, args.multi_resolution,2.3)
         self.sampler =  AspectBucketSampler(
             bucket=self.bucket, num_replicas=world_size, rank=rank)
         self.dataset = AspectDataset(
@@ -802,10 +826,10 @@ if __name__ == "__main__":
     from torchvision import utils
     for i,p in tqdm.tqdm(enumerate(arbDataloader.train_dataloader)):
         pixel_value = p['pixel_values']
-        with open(f'arbTestoutput/{i}.txt','w') as f:
+        with open(f'arbTestoutput_img/{i}.txt','w') as f:
             for input_text in p['input_texts']:
                 f.write(input_text+'\n')
         pixel_value = pixel_value/2+0.5
-        utils.save_image(pixel_value,f'arbTestoutput/{i}.webp')
+        utils.save_image(pixel_value,f'arbTestoutput_img/{i}.webp')
 
         #print(p)

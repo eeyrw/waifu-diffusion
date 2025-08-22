@@ -23,7 +23,7 @@ def worker(rank, num_replicas, args, num_epochs, output_dir):
     bucket = AspectBucket(store, args.num_buckets, args.train_batch_size, 
                           args.bucket_side_min, args.bucket_side_max, 64,
                           args.bucket_mode, args.resolution * args.resolution,
-                          args.multi_resolution, max_ratio=2.0)
+                          args.multi_resolution, max_ratio=2.3)
     
     sampler = AspectBucketSampler(bucket=bucket, num_replicas=num_replicas, rank=rank, batch_size=args.train_batch_size)
 
@@ -101,11 +101,14 @@ def merge_rank_outputs(output_dir, num_replicas,
     xs = sorted(counter.keys())
     ys = [counter[x] for x in xs]
     plt.figure(figsize=(10,6))
-    plt.bar(xs, ys, width=0.8)
+    bars = plt.bar(xs, ys, width=0.8)
+    plt.bar_label(bars, fmt="%d", label_type="edge", fontsize=8, padding=2)
     plt.xlabel("Number of times each image was used in training")
     plt.ylabel("Number of images")
     plt.title("Histogram of image training counts (all epochs and buckets)")
     plt.xticks(xs)
+    # y 轴设为对数刻度
+    plt.yscale("log")
     plt.tight_layout()
     train_count_file = os.path.join(output_dir, "image_train_count_histogram.png")
     plt.savefig(train_count_file)
