@@ -583,6 +583,8 @@ class AspectBucket:
         # 预计算 ratio
         self._bucket_ratios_flat = [(res, bw, bh, bw / bh) for res, bw, bh in self._all_buckets]
 
+        self._bucket_to_res = {b:res for res, bucket_list in self.buckets.items() for b in bucket_list}
+
     def _process_entry(self, entry: Dict, index: int, max_downscale: float = 2.0, rng: random.Random = None) -> bool:
         """
         Process a single image entry and assign it to a bucket.
