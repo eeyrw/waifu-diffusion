@@ -902,7 +902,7 @@ def main(args):
             return 1
         return torch.distributed.get_world_size()
 
-    from AspectRatioBucketDataset import ARBDataloader
+    from OptAspectRatioBucketDataset import ARBDataloader
     ws = get_world_size()
     rk = args.local_rank
     if rk == -1:
