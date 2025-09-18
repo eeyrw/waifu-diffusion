@@ -409,7 +409,6 @@ class AspectBucket:
         self.store = store
         self.buckets = {}
         self._bucket_ratios = {}
-        self._bucket_interp = {}
         self.bucket_data: Dict[int,Dict[tuple, List[int]]] = dict()
         self.init_buckets()
         self._build_bucket_lookup()
@@ -487,8 +486,6 @@ class AspectBucket:
             # and the output is the bucket index in the self.buckets array
             # to find the best fit we can just round that number to get the index
             self._bucket_ratios[resolution] = [w / h for w, h in buckets]
-            self._bucket_interp[resolution] = interp1d(self._bucket_ratios[resolution], list(range(len(buckets))), assume_sorted=True,
-                                        fill_value=None)
 
             for b in buckets:
                 self.bucket_data.setdefault(resolution,{b:[]}).update({b:[]})
