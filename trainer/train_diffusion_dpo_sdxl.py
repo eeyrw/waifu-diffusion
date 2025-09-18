@@ -386,6 +386,14 @@ def parse_args(input_args=None):
         default=1,
         help="Number of hard resets of the lr in cosine_with_restarts scheduler.",
     )
+    parser.add_argument(
+        "--multistep_milestone",
+        type=lambda x:list(map(int, x.split(','))),
+        default=[10,20],
+        help=(
+            'The multistep lr scheduler milestone'
+        ),
+    )
     parser.add_argument("--lr_power", type=float, default=1.0, help="Power factor of the polynomial scheduler.")
     parser.add_argument(
         "--dataloader_num_workers",
@@ -932,14 +940,19 @@ def main(args):
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    lr_scheduler = get_scheduler(
-        args.lr_scheduler,
-        optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
-        num_training_steps=args.max_train_steps * accelerator.num_processes,
-        num_cycles=args.lr_num_cycles,
-        power=args.lr_power,
-    )
+
+    if args.lr_scheduler == 'multistep_lr':
+        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer, args.multistep_milestone, gamma=0.1, last_epoch=-1, verbose='deprecated')
+    else:
+        lr_scheduler = get_scheduler(
+            args.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
+            num_training_steps=args.max_train_steps * accelerator.num_processes,
+            num_cycles=args.lr_num_cycles,
+            power=args.lr_power,
+        )
 
     unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         unet, optimizer, train_dataloader, lr_scheduler
